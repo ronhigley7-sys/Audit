@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chart &amp; Unit Audit Non-Compliance Tracker — 3B/3C</title>
+<style>
+  :root{
+    --ink:#12181f;
+    --panel:#1b232d;
+    --panel-2:#212b36;
+    --line:#2e3947;
+    --muted:#8fa0b3;
+    --flag:#e8b840;
+    --flag-dim:#4a3f20;
+    --danger:#d9704f;
+    --danger-dim:#4a2a20;
+    --ok:#5fae82;
+    --text:#e7ecf1;
+    --serif: 'Iowan Old Style','Palatino Linotype',Georgia,serif;
+    --sans: 'Inter','Segoe UI',system-ui,-apple-system,sans-serif;
+    --mono: 'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--ink);color:var(--text);font-family:var(--sans);min-height:100vh;}
+  header{padding:26px 32px 18px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#171f27,var(--ink));display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--flag);margin:0 0 6px;}
+  h1{font-family:var(--serif);font-weight:600;font-size:26px;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:13px;margin:0;max-width:640px;}
+  .header-actions{display:flex;gap:10px;}
+  main{max-width:1220px;margin:0 auto;padding:24px 32px 60px;}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:22px;}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
+  .stat .n{font-family:var(--serif);font-size:26px;font-weight:600;line-height:1;}
+  .stat .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:5px;}
+  .stat.open .n{color:var(--flag);}
+  .stat.closed .n{color:var(--ok);}
+  .stat.variance .n{color:var(--danger);}
+
+  .tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;}
+  .tab{background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:8px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;font-family:var(--sans);}
+  .tab.active{background:var(--panel-2);color:var(--text);border-color:#465262;font-weight:600;}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:22px;}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;padding:15px 20px;border-bottom:1px solid var(--line);background:var(--panel-2);}
+  .panel-head h2{font-family:var(--serif);font-size:15.5px;margin:0;font-weight:600;}
+  button.primary{background:var(--flag);color:#241d09;border:none;font-weight:700;font-size:13px;padding:9px 16px;border-radius:7px;cursor:pointer;font-family:var(--sans);}
+  button.primary:hover{filter:brightness(1.06);}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--muted);padding:7px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-family:var(--sans);}
+  button.ghost:hover{color:var(--text);border-color:#465262;}
+  button.small{padding:5px 9px;font-size:11.5px;}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;font-family:var(--mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  tr:hover td{background:rgba(255,255,255,0.02);}
+  .mrn{font-family:var(--mono);color:var(--muted);font-size:12px;}
+  .type-pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:10.5px;font-weight:700;letter-spacing:.02em;background:#2a3846;color:#a9c2d9;}
+  .status-pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.03em;}
+  .status-open{background:var(--flag-dim);color:var(--flag);}
+  .status-closed{background:rgba(95,174,130,.15);color:var(--ok);}
+  .var-pill{display:inline-block;padding:3px 9px;border-radius:20px;font-size:10.5px;font-weight:700;}
+  .var-not_sent{background:var(--danger-dim);color:var(--danger);}
+  .var-sent{background:var(--flag-dim);color:var(--flag);}
+  .var-received{background:rgba(95,174,130,.15);color:var(--ok);}
+  .var-na{background:#26313c;color:var(--muted);}
+  .staff-chip{display:inline-block;background:#26313c;color:#c7d4e0;padding:2px 8px;border-radius:12px;font-size:11px;margin:1px 3px 1px 0;}
+  .empty{padding:36px 20px;text-align:center;color:var(--muted);font-size:13px;}
+  .row-actions{display:flex;gap:8px;white-space:nowrap;}
+  .row-actions button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;text-decoration:underline;padding:0;font-family:var(--sans);}
+  .row-actions button:hover{color:var(--text);}
+
+  /* missing-most panel */
+  .missing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;padding:18px 20px;}
+  .missing-card{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
+  .missing-card h3{margin:0 0 10px;font-family:var(--serif);font-size:14px;color:var(--text);}
+  .missing-row{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;padding:5px 0;border-bottom:1px dashed var(--line);}
+  .missing-row:last-child{border-bottom:none;}
+  .missing-bar{flex:1;height:6px;background:#26313c;border-radius:4px;margin:0 10px;position:relative;overflow:hidden;}
+  .missing-bar i{position:absolute;left:0;top:0;bottom:0;background:var(--danger);border-radius:4px;}
+  .missing-count{font-family:var(--mono);color:var(--flag);font-weight:700;min-width:16px;text-align:right;}
+  .missing-empty{color:var(--muted);font-size:12px;}
+
+  /* modal */
+  .overlay{position:fixed;inset:0;background:rgba(10,14,18,.75);display:none;align-items:flex-start;justify-content:center;z-index:50;padding:30px 20px;overflow-y:auto;}
+  .overlay.show{display:flex;}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:100%;max-width:640px;}
+  .modal-head{padding:17px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:var(--panel);border-radius:12px 12px 0 0;}
+  .modal-head h3{margin:0;font-family:var(--serif);font-size:17px;}
+  .modal-body{padding:20px 22px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;font-family:var(--mono);}
+  .field input,.field textarea,.field select{width:100%;background:var(--ink);border:1px solid var(--line);color:var(--text);padding:9px 11px;border-radius:7px;font-size:13.5px;font-family:var(--sans);}
+  .field textarea{min-height:56px;resize:vertical;}
+  .field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .field-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .modal-foot{padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px;}
+  .close-x{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;}
+  .foot-note{font-size:12px;color:var(--muted);margin-top:16px;text-align:center;}
+  .section-label{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--flag);margin:18px 0 10px;border-top:1px solid var(--line);padding-top:14px;}
+  .section-label:first-child{border-top:none;margin-top:0;padding-top:0;}
+  .checklist-item{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--line);font-size:13px;}
+  .checklist-item:last-child{border-bottom:none;}
+  .checklist-item select{width:110px;}
+  .chips-wrap{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;min-height:20px;}
+  .chip{background:#26313c;color:#c7d4e0;padding:4px 10px;border-radius:14px;font-size:12px;display:flex;align-items:center;gap:6px;}
+  .chip button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0;line-height:1;}
+  .add-employee-row{display:flex;gap:8px;}
+  .add-employee-row select,.add-employee-row input{flex:1;}
+  .hint{font-size:11.5px;color:var(--muted);margin-top:4px;}
+  .checkbox-row{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:14px;}
+  .checkbox-row input{width:auto;}
+  .variance-box{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-top:4px;}
+</style>
+</head>
+<body>
+
+<!-- Employee acknowledgment view — shown instead of the normal tracker when
+     opened via a ?ack=<id> link. No patient/issue detail loaded or shown here,
+     only what's in audit_findings (type, date, unit, tags). -->
+<div id="ackScreen" style="display:none;position:fixed;inset:0;background:#0b0f14;z-index:5000;overflow-y:auto;">
+  <div style="max-width:520px;margin:40px auto;background:#12181f;border:1px solid #2a323c;border-radius:12px;padding:28px;font-family:var(--sans, Arial, sans-serif);color:#e6e9ee;">
+    <div id="ackContent">Loading…</div>
+  </div>
+</div>
+
+<header>
+  <div>
+    <p class="eyebrow">3B / 3C · Unit Audits</p>
+    <h1>Chart &amp; Unit Audit Non-Compliance Tracker</h1>
+    <p class="sub">Chart Audits, Sitter Audits, Behavioral Health Audits, and Pain Reassessment Audits from Smartsheet — logged manually.</p>
+  </div>
+  <div class="header-actions">
+    <button class="ghost" onclick="openSettings()">Settings</button>
+    <button class="primary" onclick="openModal()">+ Add entry</button>
+  </div>
+</header>
+
+<main>
+  <div class="stats">
+    <div class="stat"><div class="n" id="statTotal">0</div><div class="l">Total logged</div></div>
+    <div class="stat open"><div class="n" id="statOpen">0</div><div class="l">Open follow-up</div></div>
+    <div class="stat closed"><div class="n" id="statClosed">0</div><div class="l">Closed</div></div>
+    <div class="stat variance"><div class="n" id="statVariance">0</div><div class="l">Variance not sent</div></div>
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Notifications</h2></div>
+    <div id="tableWrap"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>What we're missing most</h2></div>
+    <div class="missing-grid" id="missingGrid"></div>
+  </div>
+
+  <p class="foot-note">Stored in this browser only. Sending a variance form opens your email client — it does not send automatically.</p>
+</main>
+
+<!-- Entry modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="modalTitle">Add audit entry</h3>
+      <button class="close-x" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot">
+      <span></span>
+      <div style="display:flex;gap:10px;">
+        <button class="ghost" onclick="closeModal()">Cancel</button>
+        <button class="primary" onclick="saveEntry()">Save entry</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div class="overlay" id="settingsOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Settings</h3>
+      <button class="close-x" onclick="closeSettings()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Employee directory</label>
+        <div class="chips-wrap" id="directoryChips"></div>
+        <div class="add-employee-row">
+          <input type="text" id="newDirName" placeholder="Add a name to the directory">
+          <button class="ghost small" onclick="addToDirectory()">Add</button>
+        </div>
+        <p class="hint">The staff picker on each entry pulls your real roster from CC automatically. Add names here only for people not in CC (agency, travelers, etc).</p>
+      </div>
+      <div class="field">
+        <label>Variance form — CC recipients</label>
+        <input type="text" id="ccList" placeholder="name@arnothealth.org, name2@arnothealth.org">
+        <p class="hint">Comma-separated. Used to pre-fill "Send variance form" emails.</p>
+      </div>
+      <div class="field">
+        <label>Sync to Command Center</label>
+        <p class="hint" style="margin-bottom:8px;">Sends a de-identified copy of each finding (type, date, unit, tagged staff, status) to the same Supabase project Command Center uses, so findings show up on a staff member's profile there. Patient name, MRN, visit number, and the issue description are never sent.</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="ghost small" onclick="syncAllAuditFindings()">🔄 Sync all entries to CC now</button>
+          <span id="auditSyncStatus" class="hint" style="margin:0;"></span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span></span>
+      <button class="primary" onclick="saveSettings()">Save settings</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const ENTRIES_KEY = 'auditEntries_v2';
+const DIRECTORY_KEY = 'auditEmployeeDirectory';
+const CC_KEY = 'auditVarianceCC';
+
+const AUDIT_TYPES = {
+  chart: { label: 'Chart Audit', short: 'Chart' },
+  sitter: { label: 'Sitter Audit', short: 'Sitter' },
+  behavioral: { label: 'Behavioral Health Audit', short: 'Behavioral' },
+  pain: { label: 'Pain Reassessment Audit', short: 'Pain' }
+};
+
+const CHECKLISTS = {
+  sitter: [
+    ['sight','Sight of Patient'],
+    ['distractions','Free of Distractions'],
+    ['food','Free of Food/Uncovered Drinks'],
+    ['quicktips','Sitter Quick Tips Reviewed'],
+    ['log','Sitter Log Complete']
+  ],
+  behavioral: [
+    ['cssr','CSSR'],
+    ['oneone_order','1:1 Order'],
+    ['sitter_log','Sitter Log'],
+    ['belongings','Belongings'],
+    ['reassessments','Re-Assessments'],
+    ['oneone_dc','1:1 D/C\'d'],
+    ['vitals','Vitals'],
+    ['restraints','Restraints'],
+    ['bert','BERT']
+  ],
+  pain: [
+    ['reassessed','Pain Reassessed Within Time Frame']
+  ]
+};
+
+let currentTab = 'all';
+let editingId = null;
+let modalType = 'chart';
+let modalStaff = [];
+
+// ---------- storage helpers ----------
+function loadEntries(){ try{ return JSON.parse(localStorage.getItem(ENTRIES_KEY)) || []; }catch(e){ return []; } }
+function saveEntries(e){ localStorage.setItem(ENTRIES_KEY, JSON.stringify(e)); }
+function loadDirectory(){ try{ return JSON.parse(localStorage.getItem(DIRECTORY_KEY)) || []; }catch(e){ return []; } }
+function saveDirectory(d){ localStorage.setItem(DIRECTORY_KEY, JSON.stringify(d)); }
+function loadCC(){ return localStorage.getItem(CC_KEY) || ''; }
+function saveCC(v){ localStorage.setItem(CC_KEY, v); }
+
+// ---------- CC staff directory (pulled from the same Supabase project CC uses) ----------
+let _ccDirectoryCache = null; // array of names, or null if not yet loaded
+async function fetchCcDirectory(){
+  try {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=display_name&order=display_name.asc`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+    });
+    if (r.ok) {
+      const rows = await r.json();
+      _ccDirectoryCache = rows.map(row => row.display_name).filter(Boolean);
+    }
+  } catch(e) { /* silent — falls back to the local directory list below */ }
+  // Refresh the picker if the Add/Edit modal happens to be open already
+  const sel = document.getElementById('staffDirSelect');
+  if (sel) rebuildStaffDirSelect();
+}
+// Combined list: CC's real roster (if loaded) plus any ad-hoc names added locally
+// (agency/travelers, etc. who won't be in CC's directory).
+function combinedStaffDirectory(){
+  const local = loadDirectory();
+  const cc = _ccDirectoryCache || [];
+  return Array.from(new Set([...cc, ...local])).sort((a,b)=>a.localeCompare(b));
+}
+function rebuildStaffDirSelect(){
+  const sel = document.getElementById('staffDirSelect');
+  if (!sel) return;
+  const prev = sel.value;
+  const options = combinedStaffDirectory().map(n=>`<option value="${n}">${n}</option>`).join('');
+  sel.innerHTML = `<option value="">Choose from directory…</option>${options}`;
+  sel.value = prev;
+}
+
+// ---------- Supabase sync (Command Center integration) ----------
+// Same Supabase project Command Center (CC) and its other companion tools use.
+// Only de-identified fields are ever sent — see audit_findings table comment.
+const AUDIT_SB_CONFIG = {
+  url: 'https://xnsdvdfceflmagfhpycw.supabase.co',
+  key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhuc2R2ZGZjZWZsbWFnZmhweWN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0MTk1NjgsImV4cCI6MjA5NDk5NTU2OH0.UzKZQj4BLxPpH_OCwQR8LyDUeP9YlKn5UtXRFUFaYKA'
+};
+
+function auditFindingPayload(e){
+  return {
+    id: e.id,
+    audit_type: e.type || null,
+    finding_date: e.date || null,
+    status: e.status || null,
+    unit: e.unit || null,
+    staff_names: e.staff || [],
+    tags: e.tags || [],
+    variance_status: (e.variance && e.variance.status) || null,
+    variance_date_received: (e.variance && e.variance.dateReceived) || null
+  };
+}
+
+async function pushAuditFinding(entry){
+  try {
+    await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings`, {
+      method: 'POST',
+      headers: {
+        apikey: AUDIT_SB_CONFIG.key,
+        Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify(auditFindingPayload(entry))
+    });
+  } catch(e) { /* silent — sync is best-effort, local save already succeeded */ }
+}
+
+async function deleteAuditFinding(id){
+  try {
+    await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?id=eq.${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+    });
+  } catch(e) { /* silent */ }
+}
+
+async function syncAllAuditFindings(){
+  const statusEl = document.getElementById('auditSyncStatus');
+  const entries = loadEntries();
+  if (statusEl) statusEl.textContent = `Syncing 0 / ${entries.length}…`;
+  let ok = 0;
+  for (let i = 0; i < entries.length; i++) {
+    try {
+      const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings`, {
+        method: 'POST',
+        headers: {
+          apikey: AUDIT_SB_CONFIG.key,
+          Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=merge-duplicates,return=minimal'
+        },
+        body: JSON.stringify(auditFindingPayload(entries[i]))
+      });
+      if (r.ok) ok++;
+    } catch(e) { /* keep going */ }
+    if (statusEl) statusEl.textContent = `Syncing ${i+1} / ${entries.length}…`;
+  }
+  if (statusEl) statusEl.textContent = `✓ Synced ${ok} / ${entries.length} entries to CC.`;
+}
+
+// ---------- employee acknowledgment / sign-off ----------
+const AUDIT_TYPE_LABELS = { chart:'Chart Audit', sitter:'Sitter Audit', behavioral:'Behavioral Health Audit', pain:'Pain Reassessment Audit' };
+
+async function sendAcknowledgment(id){
+  const e = loadEntries().find(x=>x.id===id);
+  if(!e) return;
+  const staffList = e.staff || [];
+  if(!staffList.length){ alert('Tag a staff member on this entry first (Edit \u2192 Staff Involved).'); return; }
+  let staffName = staffList[0];
+  if(staffList.length > 1){
+    const choice = prompt('Send to which staff member?\n' + staffList.map((s,i)=>`${i+1}. ${s}`).join('\n'), '1');
+    const idx = parseInt(choice) - 1;
+    if(isNaN(idx) || !staffList[idx]) return;
+    staffName = staffList[idx];
+  }
+
+  // Make sure this entry's de-identified summary exists in audit_findings first
+  // (the acknowledgment row references it by id).
+  await pushAuditFinding(e);
+
+  let ackId;
+  try {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
+      method: 'POST',
+      headers: {
+        apikey: AUDIT_SB_CONFIG.key,
+        Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation'
+      },
+      body: JSON.stringify({ finding_id: e.id, staff_name: staffName, requested_by: 'Ron Higley', status: 'pending' })
+    });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const rows = await r.json();
+    ackId = rows[0].id;
+  } catch(err){
+    alert('Could not create the acknowledgment request: ' + err.message);
+    return;
+  }
+
+  const link = window.location.href.split('?')[0] + '?ack=' + ackId;
+  let email = '';
+  try {
+    const r2 = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=email&display_name=eq.${encodeURIComponent(staffName)}`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+    });
+    if(r2.ok){ const rows2 = await r2.json(); email = (rows2[0] && rows2[0].email) || ''; }
+  } catch(err) { /* fall through to manual copy */ }
+
+  const subject = 'Action needed: audit finding acknowledgment';
+  const body = `Hi ${staffName.split(',')[0]},\n\nPlease review and acknowledge an audit finding tied to your name. This link does not contain any patient information — just the audit type, date, and category.\n\n${link}\n\nThanks,\nRon`;
+
+  try { await navigator.clipboard.writeText(link); } catch(err) { /* clipboard may be blocked */ }
+
+  if(email){
+    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  } else {
+    prompt(`No email on file for ${staffName} — link copied to clipboard, text or email it manually:`, link);
+  }
+}
+
+// Shows the acknowledgment screen if the page was opened with ?ack=<id>.
+async function checkAckLink(){
+  const params = new URLSearchParams(window.location.search);
+  const ackId = params.get('ack');
+  if(!ackId) return;
+
+  document.getElementById('ackScreen').style.display = 'block';
+  const content = document.getElementById('ackContent');
+
+  let row;
+  try {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=*,audit_findings(audit_type,finding_date,unit,tags)&id=eq.${encodeURIComponent(ackId)}`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+    });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const rows = await r.json();
+    row = rows[0];
+  } catch(err){
+    content.innerHTML = `<p>Sorry, this link couldn't be loaded. Ask your manager to resend it.</p>`;
+    return;
+  }
+  if(!row){
+    content.innerHTML = `<p>This link doesn't match a request on file. Ask your manager to resend it.</p>`;
+    return;
+  }
+
+  const f = row.audit_findings || {};
+  const typeLabel = AUDIT_TYPE_LABELS[f.audit_type] || f.audit_type || '—';
+
+  if(row.status === 'acknowledged'){
+    content.innerHTML = `
+      <h2 style="margin-top:0;">Already acknowledged</h2>
+      <p style="color:#9aa4b2;">You signed this on ${row.signed_at ? new Date(row.signed_at).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}) : '—'}. Nothing further needed.</p>
+    `;
+    return;
+  }
+
+  content.innerHTML = `
+    <h2 style="margin-top:0;">Audit Finding Acknowledgment</h2>
+    <p style="color:#9aa4b2;font-size:13px;">Hi ${row.staff_name.split(',')[0]} — please review and sign below. This does not include any patient information.</p>
+    <div style="background:#1a2028;border:1px solid #2a323c;border-radius:8px;padding:14px 16px;margin:16px 0;font-size:14px;">
+      <div><strong>Type:</strong> ${typeLabel}</div>
+      <div><strong>Date:</strong> ${f.finding_date || '—'}</div>
+      ${f.unit ? `<div><strong>Unit:</strong> ${f.unit}</div>` : ''}
+      ${(f.tags && f.tags.length) ? `<div><strong>Category:</strong> ${f.tags.join(', ')}</div>` : ''}
+    </div>
+    <label style="display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#9aa4b2;margin-bottom:4px;">Comments (optional)</label>
+    <textarea id="ackComment" rows="3" placeholder="Add any context or response..." style="width:100%;box-sizing:border-box;background:#1a2028;border:1px solid #2a323c;border-radius:6px;padding:10px;color:#e6e9ee;font-family:inherit;font-size:13px;margin-bottom:14px;"></textarea>
+    <label style="display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#9aa4b2;margin-bottom:4px;">Type your full name to sign</label>
+    <input id="ackSignature" type="text" placeholder="Full name" style="width:100%;box-sizing:border-box;background:#1a2028;border:1px solid #2a323c;border-radius:6px;padding:10px;color:#e6e9ee;font-family:inherit;font-size:13px;margin-bottom:16px;">
+    <button onclick="submitAcknowledgment('${row.id}')" style="width:100%;padding:12px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">Sign &amp; Submit</button>
+  `;
+}
+
+async function submitAcknowledgment(ackId){
+  const signature = (document.getElementById('ackSignature').value || '').trim();
+  if(!signature){ alert('Please type your name to sign.'); return; }
+  const comment = (document.getElementById('ackComment').value || '').trim();
+
+  try {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?id=eq.${encodeURIComponent(ackId)}`, {
+      method: 'PATCH',
+      headers: {
+        apikey: AUDIT_SB_CONFIG.key,
+        Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation'
+      },
+      body: JSON.stringify({ status: 'acknowledged', comment, signed_name: signature, signed_at: new Date().toISOString() })
+    });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const rows = await r.json();
+    const row = rows[0];
+
+    document.getElementById('ackContent').innerHTML = `
+      <h2 style="margin-top:0;">✅ Thank you</h2>
+      <p style="color:#9aa4b2;">Your acknowledgment has been recorded and sent to your manager.</p>
+    `;
+
+    // Best-effort: pop a pre-filled email to the manager. Depends on the
+    // employee's device having a mail app configured — not guaranteed, which
+    // is why the in-app "new acknowledgments" check in CC exists as a backup.
+    const f = row && row.finding_id ? row.finding_id : '';
+    setTimeout(() => {
+      const subject = `Audit acknowledgment signed — ${signature}`;
+      const body = `${signature} signed off on an audit finding.\n\nComment: ${comment || '(none)'}\n\n(Details in Command Center / the Audit tracker.)`;
+      window.location.href = `mailto:ronald.higley@arnothealth.org?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    }, 1200);
+  } catch(err){
+    alert('Could not submit — please try again. (' + err.message + ')');
+  }
+}
+
+
+
+function fmtDate(d){
+  if(!d) return '—';
+  const dt = new Date(d + 'T00:00:00');
+  return dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+}
+
+// ---------- seed data (from Smartsheet screenshots) ----------
+function seedIfMissing(){
+  let entries = loadEntries();
+  const existingIds = new Set(entries.map(e=>e.id));
+  const seeds = [];
+  let added = false;
+  seeds.forEach(s=>{
+    if(!existingIds.has(s.id)){ entries.push(s); added = true; }
+  });
+  if(added) saveEntries(entries);
+
+  // seed employee directory
+  let dir = loadDirectory();
+  [].forEach(n=>{
+    if(!dir.includes(n)) dir.push(n);
+  });
+  saveDirectory(dir);
+}
+
+// ---------- real Smartsheet data (pulled via Smartsheet connector, NPI Chart Audits sheet) ----------
+// tags are the sheet's own AD/CP/Pain Non-Compliance Reason picklist values — used for "missing most" analytics.
+const REAL_CHART_DATA = {};
+
+function applyRealChartData(){
+  let entries = loadEntries();
+  let changed = false;
+  entries.forEach(e=>{
+    const real = REAL_CHART_DATA[e.id];
+    if(!real) return;
+    e.unit = real.unit;
+    e.tags = real.tags;
+    e.issue = real.issue;
+    e.suggestedCC = real.suggestedCC;
+    if(real.staff && (!e.staff || e.staff.length===0)) e.staff = real.staff;
+    changed = true;
+  });
+  if(changed) saveEntries(entries);
+}
+
+// ---------- tabs ----------
+function renderTabs(){
+  const entries = loadEntries();
+  const counts = {all: entries.length};
+  Object.keys(AUDIT_TYPES).forEach(t=> counts[t] = entries.filter(e=>e.type===t).length);
+  const tabsEl = document.getElementById('tabs');
+  let html = `<div class="tab ${currentTab==='all'?'active':''}" onclick="setTab('all')">All (${counts.all})</div>`;
+  Object.keys(AUDIT_TYPES).forEach(t=>{
+    html += `<div class="tab ${currentTab===t?'active':''}" onclick="setTab('${t}')">${AUDIT_TYPES[t].short} (${counts[t]})</div>`;
+  });
+  tabsEl.innerHTML = html;
+}
+function setTab(t){ currentTab = t; renderAll(); }
+
+// ---------- main render ----------
+function summarize(e){
+  if(e.type==='chart') return e.issue || 'Compliance issue noted';
+  if(e.type==='pain') return e.issue || '';
+  return e.issue || (e.context || '');
+}
+function staffChips(staff){
+  if(!staff || staff.length===0) return '<span style="color:var(--muted)">—</span>';
+  return staff.map(s=>`<span class="staff-chip">${s}</span>`).join('');
+}
+function varianceLabel(v){
+  const status = (v && v.status) || 'not_sent';
+  const map = {not_sent:'Not sent', sent:'Sent', received:'Received', na:'N/A'};
+  const title = v && v.dateReceived ? ` title="Received ${v.dateReceived}"` : (v && v.dateSent ? ` title="Sent ${v.dateSent}"` : '');
+  return `<span class="var-pill var-${status}"${title}>${map[status]}</span>`;
+}
+
+function renderTable(){
+  const all = loadEntries();
+  const entries = (currentTab==='all' ? all : all.filter(e=>e.type===currentTab))
+    .sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  const wrap = document.getElementById('tableWrap');
+
+  if(entries.length===0){
+    wrap.innerHTML = '<div class="empty">No entries in this view yet.</div>';
+    return;
+  }
+
+  let rows = entries.map(e=>`
+    <tr>
+      <td>${fmtDate(e.date)}</td>
+      <td><span class="type-pill">${AUDIT_TYPES[e.type]?.short || e.type}</span></td>
+      <td>${e.patient || '—'}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${e.unit})</span>` : ''}</td>
+      <td class="mrn">${e.mrn || '—'}</td>
+      <td style="max-width:320px;">${summarize(e)}</td>
+      <td>${staffChips(e.staff)}</td>
+      <td><span class="status-pill status-${e.status}">${e.status==='open'?'Open':'Closed'}</span></td>
+      <td>${varianceLabel(e.variance)}</td>
+      <td class="row-actions">
+        <button onclick="editEntry('${e.id}')">Edit</button>
+        <button onclick="sendVariance('${e.id}')">Variance</button>
+        ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">✅ Received</button>` : ''}
+        <button onclick="sendToVarianceForm('${e.id}')" title="Open this finding pre-filled in CC's Performance Variance Report">📋 CC Form</button>
+        <button onclick="sendAcknowledgment('${e.id}')">📨 Ack</button>
+        <button onclick="deleteEntry('${e.id}')">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+
+  wrap.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Date</th><th>Type</th><th>Patient</th><th>MR#</th><th>Issue</th><th>Staff</th><th>Status</th><th>Variance</th><th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderStats(){
+  const entries = loadEntries();
+  document.getElementById('statTotal').textContent = entries.length;
+  document.getElementById('statOpen').textContent = entries.filter(e=>e.status==='open').length;
+  document.getElementById('statClosed').textContent = entries.filter(e=>e.status==='closed').length;
+  document.getElementById('statVariance').textContent = entries.filter(e=>!e.variance || e.variance.status==='not_sent').length;
+}
+
+function renderMissingMost(){
+  const entries = loadEntries();
+  const grid = document.getElementById('missingGrid');
+  let html = '';
+
+  ['sitter','behavioral','pain'].forEach(type=>{
+    const typeEntries = entries.filter(e=>e.type===type);
+    const counts = {};
+    CHECKLISTS[type].forEach(([key,label])=> counts[label]=0);
+    typeEntries.forEach(e=>{
+      if(e.tags && e.tags.length){
+        e.tags.forEach(tag=>{ counts[tag] = (counts[tag]||0) + 1; });
+      } else {
+        CHECKLISTS[type].forEach(([key,label])=>{
+          const v = e.items && e.items[key];
+          if(v === 'No') counts[label] = (counts[label]||0) + 1;
+        });
+      }
+    });
+    const maxCount = Math.max(1, ...Object.values(counts));
+    const ranked = Object.entries(counts)
+      .map(([label,count])=>({label,count}))
+      .filter(r=>r.count>0)
+      .sort((a,b)=>b.count-a.count);
+
+    html += `<div class="missing-card"><h3>${AUDIT_TYPES[type].label}</h3>`;
+    if(ranked.length===0){
+      html += `<div class="missing-empty">No "No" items logged yet.</div>`;
+    } else {
+      ranked.forEach(r=>{
+        const pct = Math.round((r.count/maxCount)*100);
+        html += `<div class="missing-row"><span>${r.label}</span><span class="missing-bar"><i style="width:${pct}%"></i></span><span class="missing-count">${r.count}</span></div>`;
+      });
+    }
+    html += `</div>`;
+  });
+
+  // Chart audits: tally by Smartsheet's own AD/CP/Pain non-compliance reason categories
+  const chartEntries = entries.filter(e=>e.type==='chart');
+  const chartCounts = {};
+  chartEntries.forEach(e=>{
+    (e.tags && e.tags.length ? e.tags : ['Unspecified']).forEach(tag=>{
+      chartCounts[tag] = (chartCounts[tag]||0)+1;
+    });
+  });
+  const chartMax = Math.max(1, ...Object.values(chartCounts));
+  const chartRanked = Object.entries(chartCounts).sort((a,b)=>b[1]-a[1]);
+  html += `<div class="missing-card" style="grid-column: 1 / -1;"><h3>Chart Audit — by compliance category</h3>`;
+  if(chartRanked.length===0){
+    html += `<div class="missing-empty">No issues logged yet.</div>`;
+  } else {
+    chartRanked.forEach(([label,count])=>{
+      const pct = Math.round((count/chartMax)*100);
+      html += `<div class="missing-row"><span>${label}</span><span class="missing-bar"><i style="width:${pct}%"></i></span><span class="missing-count">${count}</span></div>`;
+    });
+  }
+  html += `</div>`;
+
+  grid.innerHTML = html;
+}
+
+function renderAll(){
+  renderTabs();
+  renderTable();
+  renderStats();
+  renderMissingMost();
+}
+
+// ---------- entry modal ----------
+function buildStaffPickerHTML(entry){
+  modalStaff = (entry && entry.staff) ? [...entry.staff] : [];
+  const options = combinedStaffDirectory().map(n=>`<option value="${n}">${n}</option>`).join('');
+  return `
+    <div class="field">
+      <label>Staff involved</label>
+      <div class="chips-wrap" id="staffChipsWrap"></div>
+      <div class="add-employee-row">
+        <select id="staffDirSelect"><option value="">Choose from directory…</option>${options}</select>
+        <button class="ghost small" type="button" onclick="addStaffFromDirectory()">Add</button>
+        <button class="ghost small" type="button" onclick="fetchCcDirectory()" title="Refresh staff list from CC">↻</button>
+      </div>
+      <div class="add-employee-row" style="margin-top:6px;">
+        <input type="text" id="staffCustomName" placeholder="Or type a custom name (agency/travelers not in CC)">
+        <button class="ghost small" type="button" onclick="addStaffCustom()">Add</button>
+      </div>
+      <div class="checkbox-row" style="margin-top:10px;">
+        <input type="checkbox" id="over24h" onchange="renderStaffChips()" ${entry && entry.over24h ? 'checked':''}>
+        <label style="text-transform:none;font-family:var(--sans);font-size:13px;color:var(--text);margin:0;">Audit covers more than 24 hours (allows more than 2 names)</label>
+      </div>
+      <p class="hint" id="staffLimitHint"></p>
+    </div>
+  `;
+}
+function renderStaffChips(){
+  const wrap = document.getElementById('staffChipsWrap');
+  if(!wrap) return;
+  wrap.innerHTML = modalStaff.map((s,i)=>`<span class="chip">${s}<button type="button" onclick="removeStaff(${i})">&times;</button></span>`).join('') || '<span class="missing-empty">None selected</span>';
+  const over24h = document.getElementById('over24h')?.checked;
+  const limit = over24h ? Infinity : 2;
+  const hint = document.getElementById('staffLimitHint');
+  if(hint){
+    hint.textContent = over24h
+      ? `${modalStaff.length} name(s) added — no limit while this audit spans more than 24 hours.`
+      : `${modalStaff.length}/2 names added. Check the box above to add more for audits spanning over 24 hours.`;
+  }
+}
+function addStaffFromDirectory(){
+  const sel = document.getElementById('staffDirSelect');
+  const name = sel.value;
+  if(!name) return;
+  addStaffName(name);
+  sel.value = '';
+}
+function addStaffCustom(){
+  const input = document.getElementById('staffCustomName');
+  const name = input.value.trim();
+  if(!name) return;
+  let dir = loadDirectory();
+  if(!dir.includes(name)){ dir.push(name); saveDirectory(dir); }
+  addStaffName(name);
+  input.value = '';
+}
+function addStaffName(name){
+  const over24h = document.getElementById('over24h')?.checked;
+  const limit = over24h ? Infinity : 2;
+  if(modalStaff.includes(name)) return;
+  if(modalStaff.length >= limit){
+    alert('Max 2 staff names unless this audit covers more than 24 hours. Check the box to add more.');
+    return;
+  }
+  modalStaff.push(name);
+  renderStaffChips();
+}
+function removeStaff(i){
+  modalStaff.splice(i,1);
+  renderStaffChips();
+}
+
+function buildChecklistHTML(type, entry){
+  if(!CHECKLISTS[type]) return '';
+  const items = (entry && entry.items) || {};
+  return CHECKLISTS[type].map(([key,label])=>{
+    const val = items[key] || '';
+    return `
+      <div class="checklist-item">
+        <span>${label}</span>
+        <select id="chk_${key}">
+          <option value="" ${val===''?'selected':''}>—</option>
+          <option value="Yes" ${val==='Yes'?'selected':''}>Yes</option>
+          <option value="No" ${val==='No'?'selected':''}>No</option>
+          <option value="N/A" ${val==='N/A'?'selected':''}>N/A</option>
+        </select>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderModalBody(entry){
+  const type = modalType;
+  const body = document.getElementById('modalBody');
+  const showPatientMRN = true;
+
+  let html = `
+    <div class="field">
+      <label>Audit type</label>
+      <select id="fType" onchange="onTypeChange(this.value)">
+        ${Object.keys(AUDIT_TYPES).map(t=>`<option value="${t}" ${t===type?'selected':''}>${AUDIT_TYPES[t].label}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Date</label>
+        <input type="date" id="fDate" value="${entry?.date || new Date().toISOString().slice(0,10)}">
+      </div>
+      <div class="field">
+        <label>Status</label>
+        <select id="fStatus">
+          <option value="open" ${(!entry || entry.status==='open')?'selected':''}>Open — needs follow-up</option>
+          <option value="closed" ${entry?.status==='closed'?'selected':''}>Closed</option>
+        </select>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Patient (initials or name)</label>
+        <input type="text" id="fPatient" value="${entry?.patient || ''}" placeholder="e.g. XYZ">
+      </div>
+      <div class="field">
+        <label>MR#</label>
+        <input type="text" id="fMRN" value="${entry?.mrn || ''}" placeholder="e.g. 1234567890">
+      </div>
+    </div>
+    <div class="field">
+      <label>Context (unit / shift / visit#, optional)</label>
+      <input type="text" id="fContext" value="${entry?.context || ''}" placeholder="e.g. Unit 3B, Night shift 08/13/26">
+    </div>
+
+    <div class="section-label">Compliance detail</div>
+    <div id="checklistWrap">${buildChecklistHTML(type, entry)}</div>
+    <div class="field" style="margin-top:14px;">
+      <label>${type==='chart' ? 'Issue noted' : 'Comments'}</label>
+      <textarea id="fIssue" placeholder="What the audit flagged">${entry?.issue || ''}</textarea>
+    </div>
+
+    <div class="section-label">Follow-up</div>
+    ${buildStaffPickerHTML(entry)}
+    <div class="field">
+      <label>Reported by (Smartsheet)</label>
+      <input type="text" id="fReporter" value="${entry?.reporter || ''}" placeholder="e.g. jane.smith@arnothealth.org">
+    </div>
+
+    <div class="section-label">Variance form</div>
+    <div class="variance-box">
+      <div class="field-row">
+        <div class="field">
+          <label>Variance status</label>
+          <select id="fVarianceStatus">
+            <option value="not_sent" ${(!entry?.variance || entry.variance.status==='not_sent')?'selected':''}>Not sent</option>
+            <option value="sent" ${entry?.variance?.status==='sent'?'selected':''}>Sent</option>
+            <option value="received" ${entry?.variance?.status==='received'?'selected':''}>Received</option>
+            <option value="na" ${entry?.variance?.status==='na'?'selected':''}>Not applicable</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Date sent</label>
+          <input type="date" id="fVarianceDate" value="${entry?.variance?.dateSent || ''}">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Date received</label>
+          <input type="date" id="fVarianceReceivedDate" value="${entry?.variance?.dateReceived || ''}">
+        </div>
+      </div>
+      <p class="hint">Use the "Variance" button on a saved row to open a pre-filled email to your CC list (set in Settings). Once staff return the form, use the row's "✅ Received" button (or set status here) to log it.</p>
+    </div>
+  `;
+  body.innerHTML = html;
+  renderStaffChips();
+}
+
+function onTypeChange(t){
+  modalType = t;
+  const entry = editingId ? loadEntries().find(e=>e.id===editingId) : null;
+  document.getElementById('checklistWrap').innerHTML = buildChecklistHTML(t, entry);
+}
+
+function openModal(entry){
+  editingId = entry ? entry.id : null;
+  modalType = entry ? entry.type : 'chart';
+  document.getElementById('modalTitle').textContent = entry ? 'Edit audit entry' : 'Add audit entry';
+  renderModalBody(entry);
+  document.getElementById('overlay').classList.add('show');
+}
+function closeModal(){
+  document.getElementById('overlay').classList.remove('show');
+  editingId = null;
+  modalStaff = [];
+}
+function editEntry(id){
+  const e = loadEntries().find(x=>x.id===id);
+  if(e) openModal(e);
+}
+function deleteEntry(id){
+  if(!confirm('Delete this entry?')) return;
+  let entries = loadEntries().filter(e=>e.id!==id);
+  saveEntries(entries);
+  deleteAuditFinding(id); // fire-and-forget — remove from CC's synced copy too
+  renderAll();
+}
+
+function saveEntry(){
+  const type = document.getElementById('fType').value;
+  const items = {};
+  (CHECKLISTS[type]||[]).forEach(([key])=>{
+    const el = document.getElementById('chk_'+key);
+    if(el) items[key] = el.value;
+  });
+  const over24h = document.getElementById('over24h')?.checked || false;
+
+  const data = {
+    type,
+    date: document.getElementById('fDate').value,
+    status: document.getElementById('fStatus').value,
+    patient: document.getElementById('fPatient').value.trim(),
+    mrn: document.getElementById('fMRN').value.trim(),
+    context: document.getElementById('fContext').value.trim(),
+    items,
+    issue: document.getElementById('fIssue').value.trim(),
+    staff: [...modalStaff],
+    over24h,
+    reporter: document.getElementById('fReporter').value.trim(),
+    variance: {
+      status: document.getElementById('fVarianceStatus').value,
+      dateSent: document.getElementById('fVarianceDate').value,
+      dateReceived: document.getElementById('fVarianceReceivedDate').value
+    }
+  };
+
+  let entries = loadEntries();
+  if(editingId){
+    const idx = entries.findIndex(e=>e.id===editingId);
+    if(idx>-1) entries[idx] = {...entries[idx], ...data};
+  } else {
+    data.id = 'entry_' + Date.now();
+    entries.push(data);
+  }
+  saveEntries(entries);
+  const savedEntry = entries.find(e=>e.id===(editingId||data.id));
+  if (savedEntry) pushAuditFinding(savedEntry); // fire-and-forget de-identified sync to CC
+  closeModal();
+  renderAll();
+}
+
+// ---------- send finding to CC's Performance Variance Report ----------
+// Opens Command Center in a new tab, pre-filled from this audit entry, so
+// the manager can review/complete it there and use CC's own
+// "Send Variance PDF to Staff" button. Adjust CC_APP_URL below if it moves.
+const CC_APP_URL = 'https://ronhigley7-sys.github.io/CC/';
+// Best-guess mapping from audit type -> CC variance-type checkbox id.
+// Edit this if a mapping is wrong; CC will just leave the box unchecked
+// for anything not listed here so you can pick it manually.
+const AUDIT_TO_VARIANCE_TYPE = {
+  pain: 'pain-reass',
+  behavioral: 'behavior',
+  sitter: 'behavior',
+  chart: 'documentation'
+};
+function sendToVarianceForm(id){
+  const e = loadEntries().find(x=>x.id===id);
+  if(!e) return;
+  const staffName = (e.staff && e.staff[0]) || '';
+  const params = new URLSearchParams({
+    varImport: '1',
+    type: AUDIT_TO_VARIANCE_TYPE[e.type] || '',
+    staff: staffName,
+    date: e.date || '',
+    mrn: e.mrn || '',
+    issue: e.issue || '',
+    context: e.context || (AUDIT_TYPES[e.type]?.label || e.type)
+  });
+  window.open(`${CC_APP_URL}?${params.toString()}`, '_blank');
+}
+
+// ---------- variance email ----------
+function sendVariance(id){
+  const e = loadEntries().find(x=>x.id===id);
+  if(!e) return;
+  const cc = (e.suggestedCC && e.suggestedCC.length) ? e.suggestedCC.join(', ') : loadCC();
+  if(!cc){
+    alert('Add your variance form CC list in Settings first (or this entry has no "Send to" data from Smartsheet).');
+    return;
+  }
+  const subject = `Variance Form Needed — ${AUDIT_TYPES[e.type]?.label || e.type}${e.patient ? ' — ' + e.patient : ''}${e.mrn ? ' (MR# ' + e.mrn + ')' : ''}`;
+  const bodyLines = [
+    `Audit type: ${AUDIT_TYPES[e.type]?.label || e.type}`,
+    `Date: ${fmtDate(e.date)}`,
+    e.patient ? `Patient: ${e.patient}` : null,
+    e.mrn ? `MR#: ${e.mrn}` : null,
+    e.context ? `Context: ${e.context}` : null,
+    e.staff && e.staff.length ? `Staff involved: ${e.staff.join(', ')}` : null,
+    `Issue: ${e.issue || 'See attached audit notification.'}`,
+    '',
+    'Please complete a variance form for this non-compliance finding.'
+  ].filter(Boolean).join('\n');
+
+  const mailto = `mailto:${encodeURIComponent(cc)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines)}`;
+  window.location.href = mailto;
+
+  // mark as sent
+  let entries = loadEntries();
+  const idx = entries.findIndex(x=>x.id===id);
+  if(idx>-1){
+    entries[idx].variance = entries[idx].variance || {};
+    entries[idx].variance.status = 'sent';
+    entries[idx].variance.dateSent = entries[idx].variance.dateSent || new Date().toISOString().slice(0,10);
+    saveEntries(entries);
+    renderAll();
+  }
+}
+
+// ---------- mark variance form received ----------
+function receiveVariance(id){
+  let entries = loadEntries();
+  const idx = entries.findIndex(x=>x.id===id);
+  if(idx<0) return;
+  const e = entries[idx];
+  const dateReceived = prompt('Date variance form was returned (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+  if(dateReceived===null) return; // cancelled
+  entries[idx].variance = entries[idx].variance || {};
+  entries[idx].variance.status = 'received';
+  entries[idx].variance.dateReceived = dateReceived.trim() || new Date().toISOString().slice(0,10);
+  saveEntries(entries);
+  pushAuditFinding(entries[idx]); // fire-and-forget sync to CC
+  renderAll();
+}
+
+// ---------- settings ----------
+function openSettings(){
+  renderDirectoryChips();
+  document.getElementById('ccList').value = loadCC();
+  document.getElementById('settingsOverlay').classList.add('show');
+}
+function closeSettings(){
+  document.getElementById('settingsOverlay').classList.remove('show');
+}
+function renderDirectoryChips(){
+  const dir = loadDirectory();
+  const wrap = document.getElementById('directoryChips');
+  wrap.innerHTML = dir.map((n,i)=>`<span class="chip">${n}<button type="button" onclick="removeFromDirectory(${i})">&times;</button></span>`).join('') || '<span class="missing-empty">No names yet</span>';
+}
+function addToDirectory(){
+  const input = document.getElementById('newDirName');
+  const name = input.value.trim();
+  if(!name) return;
+  let dir = loadDirectory();
+  if(!dir.includes(name)) dir.push(name);
+  saveDirectory(dir);
+  input.value = '';
+  renderDirectoryChips();
+}
+function removeFromDirectory(i){
+  let dir = loadDirectory();
+  dir.splice(i,1);
+  saveDirectory(dir);
+  renderDirectoryChips();
+}
+function saveSettings(){
+  saveCC(document.getElementById('ccList').value.trim());
+  closeSettings();
+}
+
+// ---------- init ----------
+seedIfMissing();
+applyRealChartData();
+renderAll();
+fetchCcDirectory(); // pull the real staff roster from CC in the background
+checkAckLink(); // shows the acknowledgment screen instead, if ?ack=<id> is present
+</script>
+</body>
+</html>
