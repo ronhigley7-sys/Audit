@@ -158,7 +158,7 @@
     <div class="missing-grid" id="missingGrid"></div>
   </div>
 
-  <p class="foot-note">Stored in this browser only. Sending a variance form opens your email client — it does not send automatically.</p>
+  <p class="foot-note">Audit summaries sync across computers through CC/Supabase. Patient name, MR#, and free-text issue details stay on the computer where they were entered unless secure full-entry storage is added.</p>
 </main>
 
 <!-- Entry modal -->
@@ -315,14 +315,13 @@ function auditFindingPayload(e){
     unit: e.unit || null,
     staff_names: e.staff || [],
     tags: e.tags || [],
-    variance_status: (e.variance && e.variance.status) || null,
-    variance_date_received: (e.variance && e.variance.dateReceived) || null
+    variance_status: (e.variance && e.variance.status) || null
   };
 }
 
 async function pushAuditFinding(entry){
   try {
-    await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings`, {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?on_conflict=id`, {
       method: 'POST',
       headers: {
         apikey: AUDIT_SB_CONFIG.key,
@@ -332,7 +331,9 @@ async function pushAuditFinding(entry){
       },
       body: JSON.stringify(auditFindingPayload(entry))
     });
-  } catch(e) { /* silent — sync is best-effort, local save already succeeded */ }
+    return r.ok;
+  } catch(e) { /* sync is best-effort; local save already succeeded */ }
+  return false;
 }
 
 async function deleteAuditFinding(id){
@@ -344,6 +345,81 @@ async function deleteAuditFinding(id){
   } catch(e) { /* silent */ }
 }
 
+function asArray(value){
+  if(Array.isArray(value)) return value;
+  if(typeof value === 'string'){
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(e) {
+      return value ? [value] : [];
+    }
+  }
+  return [];
+}
+
+function entryFromAuditFinding(row){
+  const tags = asArray(row.tags);
+  const staff = asArray(row.staff_names);
+  const label = tags.length ? `Shared finding: ${tags.join(', ')}` : 'Shared audit finding';
+  return {
+    id: row.id,
+    type: row.audit_type || 'chart',
+    date: row.finding_date || '',
+    status: row.status || 'open',
+    patient: '',
+    mrn: '',
+    unit: row.unit || '',
+    context: row.unit ? `Unit ${row.unit}` : 'Shared audit finding',
+    items: {},
+    issue: label,
+    staff,
+    over24h: staff.length > 2,
+    reporter: '',
+    variance: { status: row.variance_status || 'not_sent', dateSent: '', dateReceived: '' },
+    tags,
+    sharedSummaryOnly: true
+  };
+}
+
+function mergeSharedEntries(localEntries, sharedEntries){
+  const merged = new Map();
+  sharedEntries.forEach(entry => merged.set(entry.id, entry));
+  localEntries.forEach(entry => {
+    const shared = merged.get(entry.id);
+    if(shared){
+      merged.set(entry.id, {
+        ...shared,
+        ...entry,
+        status: shared.status || entry.status || 'open',
+        variance: {
+          ...(entry.variance || {}),
+          status: (shared.variance && shared.variance.status) || (entry.variance && entry.variance.status) || 'not_sent'
+        },
+        tags: (entry.tags && entry.tags.length) ? entry.tags : shared.tags,
+        staff: (entry.staff && entry.staff.length) ? entry.staff : shared.staff,
+        sharedSummaryOnly: !!(entry.sharedSummaryOnly && !entry.patient && !entry.mrn)
+      });
+    } else {
+      merged.set(entry.id, entry);
+    }
+  });
+  return Array.from(merged.values());
+}
+
+async function loadSharedAuditFindings(){
+  try {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status&order=finding_date.desc.nullslast`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+    });
+    if(!r.ok) return;
+    const rows = await r.json();
+    const sharedEntries = rows.map(entryFromAuditFinding);
+    saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
+    renderAll();
+  } catch(e) { /* local entries still work if the shared table is unavailable */ }
+}
+
 async function syncAllAuditFindings(){
   const statusEl = document.getElementById('auditSyncStatus');
   const entries = loadEntries();
@@ -351,7 +427,7 @@ async function syncAllAuditFindings(){
   let ok = 0;
   for (let i = 0; i < entries.length; i++) {
     try {
-      const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings`, {
+      const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?on_conflict=id`, {
         method: 'POST',
         headers: {
           apikey: AUDIT_SB_CONFIG.key,
@@ -366,6 +442,7 @@ async function syncAllAuditFindings(){
     if (statusEl) statusEl.textContent = `Syncing ${i+1} / ${entries.length}…`;
   }
   if (statusEl) statusEl.textContent = `✓ Synced ${ok} / ${entries.length} entries to CC.`;
+  return ok;
 }
 
 // ---------- employee acknowledgment / sign-off ----------
@@ -1086,6 +1163,7 @@ function saveSettings(){
 seedIfMissing();
 applyRealChartData();
 renderAll();
+syncAllAuditFindings().then(loadSharedAuditFindings);
 fetchCcDirectory(); // pull the real staff roster from CC in the background
 checkAckLink(); // shows the acknowledgment screen instead, if ?ack=<id> is present
 </script>
