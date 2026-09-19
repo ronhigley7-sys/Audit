@@ -1384,6 +1384,8 @@ async function saveEntry(){
     staff: [...modalStaff],
     over24h,
     reporter: document.getElementById('fReporter').value.trim(),
+    // Once a shared summary is edited here, preserve the full local fields during refresh.
+    sharedSummaryOnly: false,
     variance: {
       status: document.getElementById('fVarianceStatus').value,
       dateSent: document.getElementById('fVarianceDate').value,
