@@ -209,6 +209,15 @@
           <span id="auditSyncStatus" class="hint" style="margin:0;"></span>
         </div>
       </div>
+      <div class="field">
+        <label>Import latest Smartsheet export</label>
+        <input type="file" id="auditImportFile" accept=".csv,text/csv">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+          <button class="ghost small" onclick="importAuditCsv()">Import CSV to shared list</button>
+          <span id="auditImportStatus" class="hint" style="margin:0;"></span>
+        </div>
+        <p class="hint">Export the Smartsheet report as CSV, then import it here. The shared list stores only date, audit type, unit, staff names, status, and category/reason tags.</p>
+      </div>
     </div>
     <div class="modal-foot">
       <span></span>
@@ -309,13 +318,12 @@ const SHARED_LOOKBACK_DAYS = 60;
 const SHARED_REFRESH_MS = 60000;
 let lastAuditSyncError = '';
 
-function deriveAuditTags(type, items, fallbackIssue){
+function deriveAuditTags(type, items){
   const checklist = CHECKLISTS[type] || [];
   const tags = checklist
     .filter(([key]) => items && items[key] === 'No')
     .map(([, label]) => label);
-  if(tags.length) return tags;
-  return fallbackIssue ? [fallbackIssue] : [];
+  return tags;
 }
 
 function inferUnitFromText(text){
@@ -331,7 +339,7 @@ function auditFindingPayload(e){
     status: e.status || null,
     unit: e.unit || inferUnitFromText(e.context) || null,
     staff_names: e.staff || [],
-    tags: (e.tags && e.tags.length) ? e.tags : deriveAuditTags(e.type, e.items, e.issue),
+    tags: (e.tags && e.tags.length) ? e.tags : deriveAuditTags(e.type, e.items),
     variance_status: (e.variance && e.variance.status) || null
   };
 }
@@ -471,6 +479,204 @@ async function syncAllAuditFindings(){
   }
   if (statusEl) statusEl.textContent = `✓ Synced ${ok} / ${entries.length} entries to CC.`;
   return ok;
+}
+
+function parseCsv(text){
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+  for(let i=0;i<text.length;i++){
+    const ch = text[i];
+    const next = text[i+1];
+    if(quoted){
+      if(ch === '"' && next === '"'){ cell += '"'; i++; }
+      else if(ch === '"'){ quoted = false; }
+      else { cell += ch; }
+    } else {
+      if(ch === '"') quoted = true;
+      else if(ch === ','){ row.push(cell); cell = ''; }
+      else if(ch === '\n'){
+        row.push(cell);
+        rows.push(row);
+        row = [];
+        cell = '';
+      } else if(ch !== '\r') {
+        cell += ch;
+      }
+    }
+  }
+  row.push(cell);
+  rows.push(row);
+  return rows.filter(r => r.some(c => String(c || '').trim()));
+}
+
+function normKey(value){
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g,'');
+}
+
+function csvObjects(text){
+  const rows = parseCsv(text);
+  if(rows.length < 2) return [];
+  const headers = rows[0].map(h => String(h || '').trim());
+  return rows.slice(1).map(cells => {
+    const out = {_headers: headers};
+    headers.forEach((header, i) => {
+      out[normKey(header)] = String(cells[i] || '').trim();
+    });
+    return out;
+  });
+}
+
+function pickImportValue(row, keys){
+  for(const key of keys){
+    const value = row[normKey(key)];
+    if(value) return value;
+  }
+  return '';
+}
+
+function splitImportList(value, splitCommas){
+  return String(value || '')
+    .split(splitCommas ? /[,;\n]+/ : /[;\n]+/)
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
+function normalizeAuditType(value){
+  const text = String(value || '').toLowerCase();
+  if(text.includes('sitter')) return 'sitter';
+  if(text.includes('behavior') || text.includes('behaviour') || text.includes('suicide') || text.includes('cssr')) return 'behavioral';
+  if(text.includes('pain')) return 'pain';
+  return 'chart';
+}
+
+function normalizeImportDate(value){
+  const raw = String(value || '').trim();
+  if(!raw) return '';
+  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(iso) return `${iso[1]}-${iso[2].padStart(2,'0')}-${iso[3].padStart(2,'0')}`;
+  const us = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if(us){
+    const year = us[3].length === 2 ? `20${us[3]}` : us[3];
+    return `${year}-${us[1].padStart(2,'0')}-${us[2].padStart(2,'0')}`;
+  }
+  const serial = Number(raw);
+  if(Number.isFinite(serial) && serial > 20000 && serial < 80000){
+    const d = new Date(Date.UTC(1899, 11, 30 + serial));
+    return d.toISOString().slice(0,10);
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0,10);
+}
+
+function simpleHash(value){
+  let h = 0;
+  const text = String(value || '');
+  for(let i=0;i<text.length;i++){
+    h = Math.imul(31, h) + text.charCodeAt(i) | 0;
+  }
+  return Math.abs(h).toString(36);
+}
+
+function collectImportTags(row){
+  const tags = [];
+  const skip = new Set([
+    'date','auditdate','observationdate','entrydate','createddate','type','audittype',
+    'unit','floor','location','department','status','patient','patientname','initials',
+    'mrn','mr','medicalrecordnumber','staff','staffname','staffnames','employee','employees',
+    'comments','comment','issue','issues','notes','note','finding','description'
+  ]);
+  for(const header of row._headers || []){
+    const key = normKey(header);
+    if(skip.has(key)) continue;
+    if(key.includes('reason') || key.includes('noncompliance') || key.includes('category') || key.includes('tag') || key.includes('missing')){
+      splitImportList(row[key], true).forEach(value => tags.push(value));
+    }
+  }
+  return Array.from(new Set(tags));
+}
+
+function checklistItemsFromImport(type, row){
+  const items = {};
+  (CHECKLISTS[type] || []).forEach(([key, label]) => {
+    const value = pickImportValue(row, [label, key]);
+    if(!value) return;
+    const lowered = value.toLowerCase();
+    if(['yes','y','true','1','met','complete','completed'].includes(lowered)) items[key] = 'Yes';
+    else if(['no','n','false','0','missed','missing','incomplete'].includes(lowered)) items[key] = 'No';
+    else if(['n/a','na','notapplicable'].includes(lowered.replace(/\s/g,''))) items[key] = 'N/A';
+  });
+  return items;
+}
+
+function entryFromImportRow(row){
+  const type = normalizeAuditType(pickImportValue(row, ['Audit Type','Type','Audit','Form','Category']));
+  const date = normalizeImportDate(pickImportValue(row, ['Audit Date','Date','Observation Date','Entry Date','Created Date']));
+  if(!date) return null;
+  const unitText = pickImportValue(row, ['Unit','Floor','Location','Department','Area']);
+  const context = pickImportValue(row, ['Context','Shift','Room','Visit','Visit Number']) || unitText;
+  const issue = pickImportValue(row, ['Issue','Comments','Comment','Notes','Finding','Description']);
+  const patient = pickImportValue(row, ['Patient','Patient Name','Initials']);
+  const mrn = pickImportValue(row, ['MRN','MR#','MR','Medical Record Number']);
+  const status = pickImportValue(row, ['Status','Follow Up Status']).toLowerCase() === 'closed' ? 'closed' : 'open';
+  const staff = splitImportList(pickImportValue(row, ['Staff','Staff Name','Staff Names','Employee','Employees','RN','CA','Tech']), false);
+  const tags = collectImportTags(row);
+  const items = checklistItemsFromImport(type, row);
+  const unit = inferUnitFromText(unitText || context);
+  const sourceId = pickImportValue(row, ['Row ID','RowID','Smartsheet Row ID','ID']);
+  const idSeed = sourceId || [type,date,unit,patient,mrn,issue,tags.join('|')].join('|');
+  return {
+    id: sourceId ? `ss_${simpleHash(sourceId)}` : `import_${type}_${date}_${simpleHash(idSeed)}`,
+    type,
+    date,
+    status,
+    patient,
+    mrn,
+    context,
+    unit,
+    items,
+    issue,
+    tags: tags.length ? tags : deriveAuditTags(type, items),
+    staff,
+    over24h: staff.length > 2,
+    reporter: '',
+    variance: { status: 'not_sent', dateSent: '', dateReceived: '' }
+  };
+}
+
+async function importAuditCsv(){
+  const input = document.getElementById('auditImportFile');
+  const statusEl = document.getElementById('auditImportStatus');
+  const file = input && input.files && input.files[0];
+  if(!file){ alert('Choose a Smartsheet CSV export first.'); return; }
+  if(statusEl) statusEl.textContent = 'Reading CSV...';
+  try {
+    const text = await file.text();
+    const imported = csvObjects(text).map(entryFromImportRow).filter(Boolean);
+    if(!imported.length){
+      if(statusEl) statusEl.textContent = 'No dated audit rows found.';
+      alert('No audit rows with a usable date were found in that CSV.');
+      return;
+    }
+    const byId = new Map(loadEntries().map(entry => [entry.id, entry]));
+    imported.forEach(entry => byId.set(entry.id, {...(byId.get(entry.id) || {}), ...entry}));
+    saveEntries(Array.from(byId.values()));
+    renderAll();
+
+    let synced = 0;
+    for(const entry of imported){
+      if(await pushAuditFinding(entry)) synced++;
+    }
+    await loadSharedAuditFindings();
+    if(statusEl) statusEl.textContent = `Imported ${imported.length}; shared ${synced}.`;
+    if(synced < imported.length){
+      alert(`Imported ${imported.length} rows locally, but only ${synced} updated the shared list. Try Settings > Sync all entries to CC now.`);
+    }
+  } catch(err){
+    if(statusEl) statusEl.textContent = `Import failed: ${err.message}`;
+    alert('CSV import failed: ' + err.message);
+  }
 }
 
 // ---------- employee acknowledgment / sign-off ----------
@@ -1047,7 +1253,7 @@ async function saveEntry(){
     unit: inferUnitFromText(context),
     items,
     issue,
-    tags: deriveAuditTags(type, items, issue),
+    tags: deriveAuditTags(type, items),
     staff: [...modalStaff],
     over24h,
     reporter: document.getElementById('fReporter').value.trim(),
