@@ -1058,9 +1058,11 @@ function renderTable(){
       <td>${varianceLabel(e.variance)}</td>
       <td class="row-actions">
         <button onclick="editEntry('${e.id}')">Edit</button>
-        <button onclick="sendVariance('${e.id}')">Variance</button>
+        <button onclick="sendVariance('${e.id}')" title="Open the variance email without changing its status">Open Email</button>
         <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the source Smartsheet and copy row lookup details">Smartsheet</button>
-        ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">✅ Received</button>` : ''}
+        ${(!e.variance || e.variance.status==='not_sent') ? `<button onclick="markVarianceSent('${e.id}')" title="Confirm the variance was actually sent">Mark Sent</button>` : ''}
+        ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">Mark Received</button>` : ''}
+        ${(e.variance && ['sent','received'].includes(e.variance.status)) ? `<button onclick="resetVarianceStatus('${e.id}')" title="Correct the variance status back to not sent">Reset Status</button>` : ''}
         <button onclick="sendToVarianceForm('${e.id}')" title="Open this finding pre-filled in CC's Performance Variance Report">📋 CC Form</button>
         <button onclick="sendAcknowledgment('${e.id}')">📨 Ack</button>
         <button onclick="deleteEntry('${e.id}')">Delete</button>
@@ -1470,17 +1472,33 @@ function sendVariance(id){
 
   const mailto = `mailto:${encodeURIComponent(cc)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines)}`;
   window.location.href = mailto;
+}
 
-  // mark as sent
+// ---------- explicitly mark variance form sent ----------
+function markVarianceSent(id){
   let entries = loadEntries();
   const idx = entries.findIndex(x=>x.id===id);
-  if(idx>-1){
-    entries[idx].variance = entries[idx].variance || {};
-    entries[idx].variance.status = 'sent';
-    entries[idx].variance.dateSent = entries[idx].variance.dateSent || new Date().toISOString().slice(0,10);
-    saveEntries(entries);
-    renderAll();
-  }
+  if(idx<0) return;
+  const dateSent = prompt('Date the variance was actually sent (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+  if(dateSent===null) return;
+  entries[idx].variance = entries[idx].variance || {};
+  entries[idx].variance.status = 'sent';
+  entries[idx].variance.dateSent = dateSent.trim() || new Date().toISOString().slice(0,10);
+  entries[idx].variance.dateReceived = '';
+  saveEntries(entries);
+  pushAuditFinding(entries[idx]);
+  renderAll();
+}
+
+function resetVarianceStatus(id){
+  if(!confirm('Change this variance back to Not sent?')) return;
+  let entries = loadEntries();
+  const idx = entries.findIndex(x=>x.id===id);
+  if(idx<0) return;
+  entries[idx].variance = { status:'not_sent', dateSent:'', dateReceived:'' };
+  saveEntries(entries);
+  pushAuditFinding(entries[idx]);
+  renderAll();
 }
 
 // ---------- mark variance form received ----------
