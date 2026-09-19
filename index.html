@@ -211,7 +211,7 @@
       </div>
       <div class="field">
         <label>Smartsheet lookup</label>
-        <p class="hint" style="margin-bottom:8px;">Open the source Smartsheet when you need to look up protected patient/MR# details. Row buttons open the matching row when a synced Smartsheet row ID is available, and also copy the date/type/issue/row ID as a backup.</p>
+        <p class="hint" style="margin-bottom:8px;">Open the source Smartsheet when you need to look up protected patient/MR# details. Row buttons open the source sheet and copy the date/type/issue/row ID so you can find the matching record.</p>
         <div id="smartsheetSourceButtons" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"></div>
       </div>
       <div class="field">
@@ -943,25 +943,15 @@ function smartsheetRowIdFromEntry(e){
   return match ? match[1] : '';
 }
 function smartsheetRowUrl(e, source){
-  const base = smartsheetOpenUrl(source);
-  const rowId = smartsheetRowIdFromEntry(e);
-  if(!rowId || !source.url) return base;
-  try {
-    const url = new URL(base);
-    url.searchParams.set('view', 'grid');
-    url.searchParams.set('rowId', rowId);
-    return url.toString();
-  } catch(err) {
-    const separator = base.includes('?') ? '&' : '?';
-    return base + separator + 'view=grid&rowId=' + encodeURIComponent(rowId);
-  }
+  // Smartsheet mobile rejects constructed row-id URLs. Use the source sheet
+  // until the sync can provide Smartsheet's own row permalink.
+  return smartsheetOpenUrl(source);
 }
 function smartsheetLookupText(e, source){
   const rowId = smartsheetRowIdFromEntry(e);
   return [
     'Source: ' + source.name,
     rowId ? 'Smartsheet row ID: ' + rowId : '',
-    rowId ? 'Direct row link: ' + smartsheetRowUrl(e, source) : '',
     'Date: ' + fmtDate(e.date),
     'Type: ' + (AUDIT_TYPES[e.type]?.label || e.type || ''),
     'Issue: ' + summarize(e),
@@ -989,7 +979,7 @@ async function openSmartsheetForEntry(id){
   const copied = await copyPromise;
   const statusEl = document.getElementById('auditSyncStatus');
   if(statusEl){
-    if(copied) statusEl.textContent = rowId ? 'Copied row lookup details. Opening Smartsheet row...' : 'Copied lookup details. Opening Smartsheet source...';
+    if(copied) statusEl.textContent = rowId ? 'Copied row lookup details. Opening Smartsheet source...' : 'Copied lookup details. Opening Smartsheet source...';
     else if(!opened) statusEl.textContent = 'Smartsheet pop-up was blocked. Try opening the row again.';
   }
 }
@@ -1057,7 +1047,7 @@ function renderTable(){
       <td class="row-actions">
         <button onclick="editEntry('${e.id}')">Edit</button>
         <button onclick="sendVariance('${e.id}')">Variance</button>
-        <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the matching Smartsheet row and copy lookup details">Smartsheet</button>
+        <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the source Smartsheet and copy row lookup details">Smartsheet</button>
         ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">✅ Received</button>` : ''}
         <button onclick="sendToVarianceForm('${e.id}')" title="Open this finding pre-filled in CC's Performance Variance Report">📋 CC Form</button>
         <button onclick="sendAcknowledgment('${e.id}')">📨 Ack</button>
