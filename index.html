@@ -983,12 +983,15 @@ async function openSmartsheetForEntry(id){
   if(!e) return;
   const source = smartsheetSource(e.type);
   const rowId = smartsheetRowIdFromEntry(e);
-  const copied = await copySmartsheetLookup(e, source);
-  if(copied){
-    const statusEl = document.getElementById('auditSyncStatus');
-    if(statusEl) statusEl.textContent = rowId ? 'Copied row lookup details. Opening Smartsheet row...' : 'Copied lookup details. Opening Smartsheet source...';
+  const url = smartsheetRowUrl(e, source);
+  const copyPromise = copySmartsheetLookup(e, source);
+  const opened = window.open(url, '_blank', 'noopener');
+  const copied = await copyPromise;
+  const statusEl = document.getElementById('auditSyncStatus');
+  if(statusEl){
+    if(copied) statusEl.textContent = rowId ? 'Copied row lookup details. Opening Smartsheet row...' : 'Copied lookup details. Opening Smartsheet source...';
+    else if(!opened) statusEl.textContent = 'Smartsheet pop-up was blocked. Try opening the row again.';
   }
-  window.open(smartsheetRowUrl(e, source), '_blank', 'noopener');
 }
 function openSmartsheetSource(type){
   const selected = type && type !== 'all' ? type : (currentTab !== 'all' ? currentTab : 'chart');
