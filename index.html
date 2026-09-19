@@ -211,7 +211,7 @@
       </div>
       <div class="field">
         <label>Smartsheet lookup</label>
-        <p class="hint" style="margin-bottom:8px;">Open the source Smartsheet when you need to look up protected patient/MR# details. Row buttons also copy the date/type/issue to help you find the matching record.</p>
+        <p class="hint" style="margin-bottom:8px;">Open the source Smartsheet when you need to look up protected patient/MR# details. Row buttons open the matching row when a synced Smartsheet row ID is available, and also copy the date/type/issue/row ID as a backup.</p>
         <div id="smartsheetSourceButtons" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"></div>
       </div>
       <div class="field">
@@ -934,9 +934,34 @@ function smartsheetOpenUrl(source){
 function smartsheetSource(type){
   return SMARTSHEET_SOURCES[type] || SMARTSHEET_SOURCES.chart;
 }
+function smartsheetRowIdFromEntry(e){
+  const id = String((e && e.id) || '');
+  const type = String((e && e.type) || '');
+  const typedPrefix = type ? 'ss_' + type + '_' : '';
+  if(typedPrefix && id.startsWith(typedPrefix)) return id.slice(typedPrefix.length);
+  const match = id.match(/^ss_[^_]+_(.+)$/);
+  return match ? match[1] : '';
+}
+function smartsheetRowUrl(e, source){
+  const base = smartsheetOpenUrl(source);
+  const rowId = smartsheetRowIdFromEntry(e);
+  if(!rowId || !source.url) return base;
+  try {
+    const url = new URL(base);
+    url.searchParams.set('view', 'grid');
+    url.searchParams.set('rowId', rowId);
+    return url.toString();
+  } catch(err) {
+    const separator = base.includes('?') ? '&' : '?';
+    return base + separator + 'view=grid&rowId=' + encodeURIComponent(rowId);
+  }
+}
 function smartsheetLookupText(e, source){
+  const rowId = smartsheetRowIdFromEntry(e);
   return [
     'Source: ' + source.name,
+    rowId ? 'Smartsheet row ID: ' + rowId : '',
+    rowId ? 'Direct row link: ' + smartsheetRowUrl(e, source) : '',
     'Date: ' + fmtDate(e.date),
     'Type: ' + (AUDIT_TYPES[e.type]?.label || e.type || ''),
     'Issue: ' + summarize(e),
@@ -957,12 +982,13 @@ async function openSmartsheetForEntry(id){
   const e = loadEntries().find(x=>x.id===id);
   if(!e) return;
   const source = smartsheetSource(e.type);
+  const rowId = smartsheetRowIdFromEntry(e);
   const copied = await copySmartsheetLookup(e, source);
   if(copied){
     const statusEl = document.getElementById('auditSyncStatus');
-    if(statusEl) statusEl.textContent = 'Copied row lookup details. Opening Smartsheet...';
+    if(statusEl) statusEl.textContent = rowId ? 'Copied row lookup details. Opening Smartsheet row...' : 'Copied lookup details. Opening Smartsheet source...';
   }
-  window.open(smartsheetOpenUrl(source), '_blank', 'noopener');
+  window.open(smartsheetRowUrl(e, source), '_blank', 'noopener');
 }
 function openSmartsheetSource(type){
   const selected = type && type !== 'all' ? type : (currentTab !== 'all' ? currentTab : 'chart');
@@ -1028,7 +1054,7 @@ function renderTable(){
       <td class="row-actions">
         <button onclick="editEntry('${e.id}')">Edit</button>
         <button onclick="sendVariance('${e.id}')">Variance</button>
-        <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the matching Smartsheet source and copy lookup details">Smartsheet</button>
+        <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the matching Smartsheet row and copy lookup details">Smartsheet</button>
         ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">✅ Received</button>` : ''}
         <button onclick="sendToVarianceForm('${e.id}')" title="Open this finding pre-filled in CC's Performance Variance Report">📋 CC Form</button>
         <button onclick="sendAcknowledgment('${e.id}')">📨 Ack</button>
