@@ -306,6 +306,22 @@ const AUDIT_SB_CONFIG = {
   key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhuc2R2ZGZjZWZsbWFnZmhweWN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0MTk1NjgsImV4cCI6MjA5NDk5NTU2OH0.UzKZQj4BLxPpH_OCwQR8LyDUeP9YlKn5UtXRFUFaYKA'
 };
 const SHARED_LOOKBACK_DAYS = 60;
+const SHARED_REFRESH_MS = 60000;
+let lastAuditSyncError = '';
+
+function deriveAuditTags(type, items, fallbackIssue){
+  const checklist = CHECKLISTS[type] || [];
+  const tags = checklist
+    .filter(([key]) => items && items[key] === 'No')
+    .map(([, label]) => label);
+  if(tags.length) return tags;
+  return fallbackIssue ? [fallbackIssue] : [];
+}
+
+function inferUnitFromText(text){
+  const match = String(text || '').match(/\b(3B|3C|3BC|4A|4B|OBS|MS OBS|MED\/SURG|MED SURG)\b/i);
+  return match ? match[1].toUpperCase() : '';
+}
 
 function auditFindingPayload(e){
   return {
@@ -313,15 +329,16 @@ function auditFindingPayload(e){
     audit_type: e.type || null,
     finding_date: e.date || null,
     status: e.status || null,
-    unit: e.unit || null,
+    unit: e.unit || inferUnitFromText(e.context) || null,
     staff_names: e.staff || [],
-    tags: e.tags || [],
+    tags: (e.tags && e.tags.length) ? e.tags : deriveAuditTags(e.type, e.items, e.issue),
     variance_status: (e.variance && e.variance.status) || null
   };
 }
 
 async function pushAuditFinding(entry){
   try {
+    lastAuditSyncError = '';
     const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?on_conflict=id`, {
       method: 'POST',
       headers: {
@@ -332,8 +349,11 @@ async function pushAuditFinding(entry){
       },
       body: JSON.stringify(auditFindingPayload(entry))
     });
+    if(!r.ok) lastAuditSyncError = await r.text();
     return r.ok;
-  } catch(e) { /* sync is best-effort; local save already succeeded */ }
+  } catch(e) {
+    lastAuditSyncError = e.message || String(e);
+  }
   return false;
 }
 
@@ -1006,7 +1026,7 @@ function deleteEntry(id){
   renderAll();
 }
 
-function saveEntry(){
+async function saveEntry(){
   const type = document.getElementById('fType').value;
   const items = {};
   (CHECKLISTS[type]||[]).forEach(([key])=>{
@@ -1014,6 +1034,8 @@ function saveEntry(){
     if(el) items[key] = el.value;
   });
   const over24h = document.getElementById('over24h')?.checked || false;
+  const context = document.getElementById('fContext').value.trim();
+  const issue = document.getElementById('fIssue').value.trim();
 
   const data = {
     type,
@@ -1021,9 +1043,11 @@ function saveEntry(){
     status: document.getElementById('fStatus').value,
     patient: document.getElementById('fPatient').value.trim(),
     mrn: document.getElementById('fMRN').value.trim(),
-    context: document.getElementById('fContext').value.trim(),
+    context,
+    unit: inferUnitFromText(context),
     items,
-    issue: document.getElementById('fIssue').value.trim(),
+    issue,
+    tags: deriveAuditTags(type, items, issue),
     staff: [...modalStaff],
     over24h,
     reporter: document.getElementById('fReporter').value.trim(),
@@ -1044,9 +1068,21 @@ function saveEntry(){
   }
   saveEntries(entries);
   const savedEntry = entries.find(e=>e.id===(editingId||data.id));
-  if (savedEntry) pushAuditFinding(savedEntry); // fire-and-forget de-identified sync to CC
   closeModal();
   renderAll();
+  if (savedEntry) {
+    const statusEl = document.getElementById('auditSyncStatus');
+    if(statusEl) statusEl.textContent = 'Saving shared copy...';
+    const synced = await pushAuditFinding(savedEntry);
+    if(synced){
+      if(statusEl) statusEl.textContent = 'Saved to shared audit list.';
+      await loadSharedAuditFindings();
+    } else {
+      if(statusEl) statusEl.textContent = 'Saved locally, but shared update failed.';
+      alert('Entry saved on this computer, but it did not update the shared audit list. Open Settings and use "Sync all entries to CC now" after checking the connection.');
+      if(lastAuditSyncError) console.warn('Audit shared sync failed:', lastAuditSyncError);
+    }
+  }
 }
 
 // ---------- send finding to CC's Performance Variance Report ----------
@@ -1172,6 +1208,7 @@ seedIfMissing();
 applyRealChartData();
 renderAll();
 syncAllAuditFindings().then(loadSharedAuditFindings);
+setInterval(loadSharedAuditFindings, SHARED_REFRESH_MS);
 fetchCcDirectory(); // pull the real staff roster from CC in the background
 checkAckLink(); // shows the acknowledgment screen instead, if ?ack=<id> is present
 </script>
