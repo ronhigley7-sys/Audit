@@ -423,19 +423,23 @@ function mergeSharedEntries(localEntries, sharedEntries){
   localEntries.forEach(entry => {
     const shared = merged.get(entry.id);
     if(shared){
+      const keepLocalDetails = !(entry.sharedSummaryOnly && !entry.patient && !entry.mrn);
       merged.set(entry.id, {
         ...shared,
-        ...entry,
+        ...(keepLocalDetails ? entry : {}),
         status: shared.status || entry.status || 'open',
+        patient: keepLocalDetails ? entry.patient : shared.patient,
+        mrn: keepLocalDetails ? entry.mrn : shared.mrn,
+        issue: keepLocalDetails ? (entry.issue || shared.issue) : shared.issue,
         variance: {
-          ...(entry.variance || {}),
+          ...(keepLocalDetails ? (entry.variance || {}) : {}),
           status: (shared.variance && shared.variance.status) || (entry.variance && entry.variance.status) || 'not_sent'
         },
-        tags: (entry.tags && entry.tags.length) ? entry.tags : shared.tags,
-        staff: (entry.staff && entry.staff.length) ? entry.staff : shared.staff,
-        sharedSummaryOnly: !!(entry.sharedSummaryOnly && !entry.patient && !entry.mrn)
+        tags: (keepLocalDetails && entry.tags && entry.tags.length) ? entry.tags : shared.tags,
+        staff: (keepLocalDetails && entry.staff && entry.staff.length) ? entry.staff : shared.staff,
+        sharedSummaryOnly: !keepLocalDetails || !!(entry.sharedSummaryOnly && !entry.patient && !entry.mrn)
       });
-    } else {
+    } else if(!entry.sharedSummaryOnly){
       merged.set(entry.id, entry);
     }
   });
@@ -904,6 +908,15 @@ function staffChips(staff){
   if(!staff || staff.length===0) return '<span style="color:var(--muted)">—</span>';
   return staff.map(s=>`<span class="staff-chip">${s}</span>`).join('');
 }
+function protectedPhiLabel(){
+  return '<span style="color:var(--muted);font-size:12px;" title="Patient identifiers are not stored in the shared public summary table.">Protected</span>';
+}
+function patientCell(e){
+  return e.patient || (e.sharedSummaryOnly ? protectedPhiLabel() : '—');
+}
+function mrnCell(e){
+  return e.mrn || (e.sharedSummaryOnly ? protectedPhiLabel() : '—');
+}
 function varianceLabel(v){
   const status = (v && v.status) || 'not_sent';
   const map = {not_sent:'Not sent', sent:'Sent', received:'Received', na:'N/A'};
@@ -926,8 +939,8 @@ function renderTable(){
     <tr>
       <td>${fmtDate(e.date)}</td>
       <td><span class="type-pill">${AUDIT_TYPES[e.type]?.short || e.type}</span></td>
-      <td>${e.patient || '—'}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${e.unit})</span>` : ''}</td>
-      <td class="mrn">${e.mrn || '—'}</td>
+      <td>${patientCell(e)}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${e.unit})</span>` : ''}</td>
+      <td class="mrn">${mrnCell(e)}</td>
       <td style="max-width:320px;">${summarize(e)}</td>
       <td>${staffChips(e.staff)}</td>
       <td><span class="status-pill status-${e.status}">${e.status==='open'?'Open':'Closed'}</span></td>
