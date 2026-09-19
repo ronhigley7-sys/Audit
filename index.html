@@ -210,6 +210,11 @@
         </div>
       </div>
       <div class="field">
+        <label>Smartsheet lookup</label>
+        <p class="hint" style="margin-bottom:8px;">Open the source Smartsheet when you need to look up protected patient/MR# details. Row buttons also copy the date/type/issue to help you find the matching record.</p>
+        <div id="smartsheetSourceButtons" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"></div>
+      </div>
+      <div class="field">
         <label>Import latest Smartsheet export</label>
         <input type="file" id="auditImportFile" accept=".csv,text/csv">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
@@ -236,6 +241,12 @@ const AUDIT_TYPES = {
   sitter: { label: 'Sitter Audit', short: 'Sitter' },
   behavioral: { label: 'Behavioral Health Audit', short: 'Behavioral' },
   pain: { label: 'Pain Reassessment Audit', short: 'Pain' }
+};
+const SMARTSHEET_SOURCES = {
+  chart: { name: 'NPI Chart Audits', query: 'NPI Chart Audits' },
+  pain: { name: 'Pain Reassessment Audits', query: 'Pain Reassessment Audits' },
+  sitter: { name: 'Inpatient Sitter Audits', query: 'Inpatient Sitter Audits' },
+  behavioral: { name: 'Inpatient Behavior Health Audits', query: 'Inpatient Behavior Health Audits' }
 };
 
 const CHECKLISTS = {
@@ -898,6 +909,56 @@ function renderTabs(){
 }
 function setTab(t){ currentTab = t; renderAll(); }
 
+function smartsheetSearchUrl(query){
+  return 'https://app.smartsheet.com/b/search?query=' + encodeURIComponent(query);
+}
+function smartsheetSource(type){
+  return SMARTSHEET_SOURCES[type] || SMARTSHEET_SOURCES.chart;
+}
+function smartsheetLookupText(e, source){
+  return [
+    'Source: ' + source.name,
+    'Date: ' + fmtDate(e.date),
+    'Type: ' + (AUDIT_TYPES[e.type]?.label || e.type || ''),
+    'Issue: ' + summarize(e),
+    e.unit ? 'Unit: ' + e.unit : ''
+  ].filter(Boolean).join('\n');
+}
+async function copySmartsheetLookup(e, source){
+  const text = smartsheetLookupText(e, source);
+  try {
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch(err) { /* opening Smartsheet is still useful */ }
+  return false;
+}
+async function openSmartsheetForEntry(id){
+  const e = loadEntries().find(x=>x.id===id);
+  if(!e) return;
+  const source = smartsheetSource(e.type);
+  const copied = await copySmartsheetLookup(e, source);
+  if(copied){
+    const statusEl = document.getElementById('auditSyncStatus');
+    if(statusEl) statusEl.textContent = 'Copied row lookup details. Opening Smartsheet...';
+  }
+  window.open(smartsheetSearchUrl(source.query), '_blank', 'noopener');
+}
+function openSmartsheetSource(type){
+  const selected = type && type !== 'all' ? type : (currentTab !== 'all' ? currentTab : 'chart');
+  const source = smartsheetSource(selected);
+  window.open(smartsheetSearchUrl(source.query), '_blank', 'noopener');
+}
+function renderSmartsheetSourceButtons(){
+  const wrap = document.getElementById('smartsheetSourceButtons');
+  if(!wrap) return;
+  wrap.innerHTML = Object.keys(SMARTSHEET_SOURCES).map(type => {
+    const label = AUDIT_TYPES[type]?.short || type;
+    return '<button class="ghost small" type="button" onclick="openSmartsheetSource(\'' + type + '\')">Open ' + label + '</button>';
+  }).join('');
+}
+
 // ---------- main render ----------
 function summarize(e){
   if(e.type==='chart') return e.issue || 'Compliance issue noted';
@@ -948,6 +1009,7 @@ function renderTable(){
       <td class="row-actions">
         <button onclick="editEntry('${e.id}')">Edit</button>
         <button onclick="sendVariance('${e.id}')">Variance</button>
+        <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the matching Smartsheet source and copy lookup details">Smartsheet</button>
         ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">✅ Received</button>` : ''}
         <button onclick="sendToVarianceForm('${e.id}')" title="Open this finding pre-filled in CC's Performance Variance Report">📋 CC Form</button>
         <button onclick="sendAcknowledgment('${e.id}')">📨 Ack</button>
@@ -1390,6 +1452,7 @@ function receiveVariance(id){
 // ---------- settings ----------
 function openSettings(){
   renderDirectoryChips();
+  renderSmartsheetSourceButtons();
   document.getElementById('ccList').value = loadCC();
   document.getElementById('settingsOverlay').classList.add('show');
 }
