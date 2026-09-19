@@ -358,6 +358,18 @@ function inferUnitFromText(text){
   return match ? match[1].toUpperCase() : '';
 }
 
+function is3B3CUnit(entry){
+  const rawUnit = entry && (entry.unit || inferUnitFromText(entry.context));
+  const unit = String(rawUnit || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  return unit === '3B' || unit === '3C' || unit === '3BC';
+}
+
+function visibleEntries(){
+  return loadEntries().filter(is3B3CUnit);
+}
+
 function auditFindingPayload(e){
   return {
     id: e.id,
@@ -481,7 +493,7 @@ async function loadSharedAuditFindings(){
     });
     if(!r.ok) return;
     const rows = await r.json();
-    const sharedEntries = rows.map(entryFromAuditFinding);
+    const sharedEntries = rows.map(entryFromAuditFinding).filter(is3B3CUnit);
     saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
     renderAll();
   } catch(e) { /* local entries still work if the shared table is unavailable */ }
@@ -913,7 +925,7 @@ function applyRealChartData(){
 
 // ---------- tabs ----------
 function renderTabs(){
-  const entries = loadEntries();
+  const entries = visibleEntries();
   const counts = {all: entries.length};
   Object.keys(AUDIT_TYPES).forEach(t=> counts[t] = entries.filter(e=>e.type===t).length);
   const tabsEl = document.getElementById('tabs');
@@ -1024,7 +1036,7 @@ function varianceLabel(v){
 }
 
 function renderTable(){
-  const all = loadEntries();
+  const all = visibleEntries();
   const entries = (currentTab==='all' ? all : all.filter(e=>e.type===currentTab))
     .sort((a,b)=> (b.date||'').localeCompare(a.date||''));
   const wrap = document.getElementById('tableWrap');
@@ -1067,7 +1079,7 @@ function renderTable(){
 }
 
 function renderStats(){
-  const entries = loadEntries();
+  const entries = visibleEntries();
   document.getElementById('statTotal').textContent = entries.length;
   document.getElementById('statOpen').textContent = entries.filter(e=>e.status==='open').length;
   document.getElementById('statClosed').textContent = entries.filter(e=>e.status==='closed').length;
@@ -1075,7 +1087,7 @@ function renderStats(){
 }
 
 function renderMissingMost(){
-  const entries = loadEntries();
+  const entries = visibleEntries();
   const grid = document.getElementById('missingGrid');
   let html = '';
 
