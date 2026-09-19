@@ -243,10 +243,26 @@ const AUDIT_TYPES = {
   pain: { label: 'Pain Reassessment Audit', short: 'Pain' }
 };
 const SMARTSHEET_SOURCES = {
-  chart: { name: 'NPI Chart Audits', query: 'NPI Chart Audits' },
-  pain: { name: 'Pain Reassessment Audits', query: 'Pain Reassessment Audits' },
-  sitter: { name: 'Inpatient Sitter Audits', query: 'Inpatient Sitter Audits' },
-  behavioral: { name: 'Inpatient Behavior Health Audits', query: 'Inpatient Behavior Health Audits' }
+  chart: {
+    name: 'NPI Chart Audits',
+    query: 'NPI Chart Audits',
+    url: 'https://app.smartsheet.com/sheets/1183027658286980'
+  },
+  pain: {
+    name: 'Pain Reassessment Audits',
+    query: 'Pain Reassessment Audits',
+    url: 'https://app.smartsheet.com/sheets/5168667303038852'
+  },
+  sitter: {
+    name: 'Inpatient Sitter Audits',
+    query: 'Inpatient Sitter Audits',
+    url: 'https://app.smartsheet.com/sheets/8912264442630020'
+  },
+  behavioral: {
+    name: 'Inpatient Behavior Health Audits',
+    query: 'Inpatient Behavior Health Audits',
+    url: 'https://app.smartsheet.com/sheets/6660464628944772'
+  }
 };
 
 const CHECKLISTS = {
@@ -912,6 +928,9 @@ function setTab(t){ currentTab = t; renderAll(); }
 function smartsheetSearchUrl(query){
   return 'https://app.smartsheet.com/b/search?query=' + encodeURIComponent(query);
 }
+function smartsheetOpenUrl(source){
+  return source.url || smartsheetSearchUrl(source.query);
+}
 function smartsheetSource(type){
   return SMARTSHEET_SOURCES[type] || SMARTSHEET_SOURCES.chart;
 }
@@ -943,12 +962,12 @@ async function openSmartsheetForEntry(id){
     const statusEl = document.getElementById('auditSyncStatus');
     if(statusEl) statusEl.textContent = 'Copied row lookup details. Opening Smartsheet...';
   }
-  window.open(smartsheetSearchUrl(source.query), '_blank', 'noopener');
+  window.open(smartsheetOpenUrl(source), '_blank', 'noopener');
 }
 function openSmartsheetSource(type){
   const selected = type && type !== 'all' ? type : (currentTab !== 'all' ? currentTab : 'chart');
   const source = smartsheetSource(selected);
-  window.open(smartsheetSearchUrl(source.query), '_blank', 'noopener');
+  window.open(smartsheetOpenUrl(source), '_blank', 'noopener');
 }
 function renderSmartsheetSourceButtons(){
   const wrap = document.getElementById('smartsheetSourceButtons');
