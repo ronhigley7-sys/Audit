@@ -28,7 +28,7 @@
   h1{font-family:var(--serif);font-weight:600;font-size:26px;margin:0 0 4px;}
   .sub{color:var(--muted);font-size:13px;margin:0;max-width:640px;}
   .header-actions{display:flex;gap:10px;}
-  main{max-width:1220px;margin:0 auto;padding:24px 32px 60px;}
+  main{max-width:1600px;margin:0 auto;padding:24px 32px 60px;}
 
   .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:22px;}
   .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
@@ -73,10 +73,18 @@
   .var-na{background:#26313c;color:var(--muted);}
   .staff-chip{display:inline-block;background:#26313c;color:#c7d4e0;padding:2px 8px;border-radius:12px;font-size:11px;margin:1px 3px 1px 0;}
   .empty{padding:36px 20px;text-align:center;color:var(--muted);font-size:13px;}
-  .row-actions{display:flex;gap:8px;white-space:nowrap;}
+  .row-actions{display:flex;gap:7px 10px;white-space:normal;flex-wrap:wrap;min-width:230px;}
   .row-actions button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;text-decoration:underline;padding:0;font-family:var(--sans);}
   .row-actions button:hover{color:var(--text);}
   .returned-meta{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4;}
+  .notifications-table{table-layout:auto;}
+  .notifications-table .issue-cell{min-width:360px;width:38%;line-height:1.35;}
+  .notifications-table .actions-cell{min-width:250px;width:25%;}
+  @media(max-width:1000px){
+    main{padding:18px 12px 45px;}
+    .panel{overflow-x:auto;}
+    .notifications-table{min-width:1120px;}
+  }
 
   /* missing-most panel */
   .missing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;padding:18px 20px;}
@@ -1114,11 +1122,11 @@ function renderTable(){
       <td><span class="type-pill">${AUDIT_TYPES[e.type]?.short || e.type}</span></td>
       <td>${patientCell(e)}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${e.unit})</span>` : ''}</td>
       <td class="mrn">${mrnCell(e)}</td>
-      <td style="max-width:320px;">${summarize(e)}</td>
+      <td class="issue-cell">${summarize(e)}</td>
       <td>${staffChips(e.staff)}</td>
       <td><span class="status-pill status-${e.status}">${e.status==='open'?'Open':'Closed'}</span></td>
       <td>${varianceLabel(e.variance)}</td>
-      <td class="row-actions">
+      <td class="row-actions actions-cell">
         <button onclick="editEntry('${e.id}')">Edit</button>
         <button onclick="sendVariance('${e.id}')" title="Open the variance email without changing its status">Open Email</button>
         <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the source Smartsheet and copy row lookup details">Smartsheet</button>
@@ -1134,7 +1142,7 @@ function renderTable(){
   `).join('');
 
   wrap.innerHTML = `
-    <table>
+    <table class="notifications-table">
       <thead><tr>
         <th>Date</th><th>Type</th><th>Patient</th><th>MR#</th><th>Issue</th><th>Staff</th><th>Status</th><th>Variance</th><th></th>
       </tr></thead>
