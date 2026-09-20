@@ -37,6 +37,11 @@
   .stat.open .n{color:var(--flag);}
   .stat.closed .n{color:var(--ok);}
   .stat.variance .n{color:var(--danger);}
+  .stat.awaiting .n{color:var(--flag);}
+  .stat.returned .n{color:var(--ok);}
+  .return-alert{display:none;background:rgba(95,174,130,.12);border:1px solid rgba(95,174,130,.45);color:#b9e3ca;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:13px;align-items:center;justify-content:space-between;gap:12px;}
+  .return-alert.show{display:flex;}
+  .panel-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 
   .tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;}
   .tab{background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:8px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;font-family:var(--sans);}
@@ -71,6 +76,7 @@
   .row-actions{display:flex;gap:8px;white-space:nowrap;}
   .row-actions button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;text-decoration:underline;padding:0;font-family:var(--sans);}
   .row-actions button:hover{color:var(--text);}
+  .returned-meta{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4;}
 
   /* missing-most panel */
   .missing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;padding:18px 20px;}
@@ -144,6 +150,13 @@
     <div class="stat open"><div class="n" id="statOpen">0</div><div class="l">Open follow-up</div></div>
     <div class="stat closed"><div class="n" id="statClosed">0</div><div class="l">Closed</div></div>
     <div class="stat variance"><div class="n" id="statVariance">0</div><div class="l">Variance not sent</div></div>
+    <div class="stat awaiting"><div class="n" id="statAwaiting">0</div><div class="l">Awaiting return</div></div>
+    <div class="stat returned"><div class="n" id="statReturned">0</div><div class="l">Returned</div></div>
+  </div>
+
+  <div class="return-alert" id="returnAlert">
+    <span id="returnAlertText"></span>
+    <button class="ghost small" onclick="showReturnedForms()">View returned forms</button>
   </div>
 
   <div class="tabs" id="tabs"></div>
@@ -151,6 +164,14 @@
   <div class="panel">
     <div class="panel-head"><h2>Notifications</h2></div>
     <div id="tableWrap"></div>
+  </div>
+
+  <div class="panel" id="returnedPanel">
+    <div class="panel-head">
+      <h2>Returned Variance Forms</h2>
+      <div class="panel-tools"><button class="ghost small" onclick="printAllReturned()">Print all returned</button></div>
+    </div>
+    <div id="returnedWrap"></div>
   </div>
 
   <div class="panel">
@@ -293,6 +314,7 @@ let currentTab = 'all';
 let editingId = null;
 let modalType = 'chart';
 let modalStaff = [];
+let acknowledgmentByFinding = new Map();
 
 // ---------- storage helpers ----------
 function loadEntries(){ try{ return JSON.parse(localStorage.getItem(ENTRIES_KEY)) || []; }catch(e){ return []; } }
@@ -301,6 +323,11 @@ function loadDirectory(){ try{ return JSON.parse(localStorage.getItem(DIRECTORY_
 function saveDirectory(d){ localStorage.setItem(DIRECTORY_KEY, JSON.stringify(d)); }
 function loadCC(){ return localStorage.getItem(CC_KEY) || ''; }
 function saveCC(v){ localStorage.setItem(CC_KEY, v); }
+function escapeHtml(value){
+  return String(value == null ? '' : value).replace(/[&<>"']/g, ch=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  })[ch]);
+}
 
 // ---------- CC staff directory (pulled from the same Supabase project CC uses) ----------
 let _ccDirectoryCache = null; // array of names, or null if not yet loaded
@@ -497,6 +524,40 @@ async function loadSharedAuditFindings(){
     saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
     renderAll();
   } catch(e) { /* local entries still work if the shared table is unavailable */ }
+}
+
+// Employee sign-offs are the authoritative cross-computer return signal.
+// A signed acknowledgment automatically changes the matching variance to
+// Received and supplies the employee response/signature for viewing/printing.
+async function loadAcknowledgmentReturns(){
+  try {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=id,finding_id,staff_name,status,comment,signed_name,signed_at,created_at&status=eq.acknowledged&order=signed_at.desc.nullslast`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+    });
+    if(!r.ok) return;
+    const rows = await r.json();
+    acknowledgmentByFinding = new Map();
+    rows.forEach(row=>{
+      if(row.finding_id && !acknowledgmentByFinding.has(row.finding_id)) acknowledgmentByFinding.set(row.finding_id, row);
+    });
+
+    const entries = loadEntries();
+    let changed = false;
+    entries.forEach(entry=>{
+      const ack = acknowledgmentByFinding.get(entry.id);
+      if(!ack) return;
+      entry.variance = entry.variance || {};
+      const receivedDate = ack.signed_at ? ack.signed_at.slice(0,10) : new Date().toISOString().slice(0,10);
+      if(entry.variance.status !== 'received' || entry.variance.dateReceived !== receivedDate){
+        entry.variance.status = 'received';
+        entry.variance.dateReceived = receivedDate;
+        entry.variance.receivedAutomatically = true;
+        changed = true;
+      }
+    });
+    if(changed) saveEntries(entries);
+    renderAll();
+  } catch(e) { /* manual receipt tracking remains available */ }
 }
 
 async function syncAllAuditFindings(){
@@ -1030,9 +1091,10 @@ function mrnCell(e){
 }
 function varianceLabel(v){
   const status = (v && v.status) || 'not_sent';
-  const map = {not_sent:'Not sent', sent:'Sent', received:'Received', na:'N/A'};
+  const map = {not_sent:'Not sent', sent:'Awaiting return', received:'Returned', na:'N/A'};
   const title = v && v.dateReceived ? ` title="Received ${v.dateReceived}"` : (v && v.dateSent ? ` title="Sent ${v.dateSent}"` : '');
-  return `<span class="var-pill var-${status}"${title}>${map[status]}</span>`;
+  const detail = v && v.dateReceived ? `<div class="returned-meta">${fmtDate(v.dateReceived)}${v.receivedAutomatically ? ' · employee signed' : ''}</div>` : '';
+  return `<span class="var-pill var-${status}"${title}>${map[status]}</span>${detail}`;
 }
 
 function renderTable(){
@@ -1063,6 +1125,7 @@ function renderTable(){
         ${(!e.variance || e.variance.status==='not_sent') ? `<button onclick="markVarianceSent('${e.id}')" title="Confirm the variance was actually sent">Mark Sent</button>` : ''}
         ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">Mark Received</button>` : ''}
         ${(e.variance && ['sent','received'].includes(e.variance.status)) ? `<button onclick="resetVarianceStatus('${e.id}')" title="Correct the variance status back to not sent">Reset Status</button>` : ''}
+        ${(e.variance && e.variance.status==='received') ? `<button onclick="printReturnedForm('${e.id}')" title="View and print this returned form">Print Form</button>` : ''}
         <button onclick="sendToVarianceForm('${e.id}')" title="Open this finding pre-filled in CC's Performance Variance Report">📋 CC Form</button>
         <button onclick="sendAcknowledgment('${e.id}')">📨 Ack</button>
         <button onclick="deleteEntry('${e.id}')">Delete</button>
@@ -1080,12 +1143,95 @@ function renderTable(){
   `;
 }
 
+function returnedEntries(){
+  return visibleEntries().filter(e=>e.variance && e.variance.status==='received')
+    .sort((a,b)=>String(b.variance.dateReceived || b.date || '').localeCompare(String(a.variance.dateReceived || a.date || '')));
+}
+
+function renderReturnedForms(){
+  const wrap = document.getElementById('returnedWrap');
+  const entries = returnedEntries();
+  if(!entries.length){
+    wrap.innerHTML = '<div class="empty">No returned variance forms yet.</div>';
+    return;
+  }
+  wrap.innerHTML = `<table><thead><tr><th>Returned</th><th>Employee</th><th>Audit date</th><th>Type</th><th>Response</th><th></th></tr></thead><tbody>${entries.map(e=>{
+    const ack = acknowledgmentByFinding.get(e.id);
+    const employee = (ack && (ack.signed_name || ack.staff_name)) || (e.staff || []).join(', ') || '—';
+    const response = ack && ack.comment ? ack.comment : (e.variance.receivedAutomatically ? 'Signed acknowledgment received' : 'Returned outside the online acknowledgment link');
+    return `<tr><td>${fmtDate(e.variance.dateReceived)}</td><td>${escapeHtml(employee)}</td><td>${fmtDate(e.date)}</td><td><span class="type-pill">${escapeHtml(AUDIT_TYPES[e.type]?.short || e.type)}</span></td><td>${escapeHtml(response)}</td><td class="row-actions"><button onclick="printReturnedForm('${e.id}')">View / Print</button></td></tr>`;
+  }).join('')}</tbody></table>`;
+}
+
+function variancePrintSection(e){
+  const ack = acknowledgmentByFinding.get(e.id);
+  const employee = (ack && (ack.signed_name || ack.staff_name)) || (e.staff || []).join(', ') || '—';
+  const response = ack && ack.comment ? ack.comment : (e.variance && e.variance.receivedAutomatically ? 'Employee signed the online acknowledgment.' : 'Variance form was manually marked as returned.');
+  const signedAt = ack && ack.signed_at ? new Date(ack.signed_at).toLocaleString('en-US') : fmtDate(e.variance && e.variance.dateReceived);
+  return `<section class="form">
+    <div class="brand">ARNOT OGDEN MEDICAL CENTER · 3B/3C STROKE TELEMETRY</div>
+    <h1>Returned Variance Form</h1>
+    <div class="grid">
+      <div><b>Employee</b><span>${escapeHtml(employee)}</span></div>
+      <div><b>Audit type</b><span>${escapeHtml(AUDIT_TYPES[e.type]?.label || e.type)}</span></div>
+      <div><b>Audit date</b><span>${escapeHtml(fmtDate(e.date))}</span></div>
+      <div><b>Date returned</b><span>${escapeHtml(fmtDate(e.variance && e.variance.dateReceived))}</span></div>
+      <div><b>Unit</b><span>${escapeHtml(e.unit || '3B/3C')}</span></div>
+      <div><b>Follow-up status</b><span>${escapeHtml(e.status==='closed' ? 'Closed' : 'Open')}</span></div>
+    </div>
+    <h2>Finding</h2><p>${escapeHtml(summarize(e) || '—')}</p>
+    <h2>Employee response</h2><p>${escapeHtml(response)}</p>
+    <div class="signature"><div><b>Signed by</b><span>${escapeHtml(employee)}</span></div><div><b>Signed / received</b><span>${escapeHtml(signedAt || '—')}</span></div></div>
+    <div class="manager"><b>Manager follow-up / action taken</b><div></div></div>
+    <div class="manager-sign"><span>Manager signature</span><span>Date</span></div>
+  </section>`;
+}
+
+function openPrintWindow(forms, title){
+  const popup = window.open('', '_blank');
+  if(!popup){ alert('The print window was blocked. Allow pop-ups for this site and try again.'); return; }
+  popup.document.write(`<!doctype html><html><head><title>${escapeHtml(title)}</title><style>
+    @page{size:letter;margin:.55in}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#152238;margin:0}.form{page-break-after:always}.form:last-child{page-break-after:auto}.brand{color:#b08a1d;font-size:11px;font-weight:700;letter-spacing:.08em;border-bottom:3px solid #102d54;padding-bottom:8px}h1{color:#102d54;font-family:Georgia,serif;margin:14px 0 18px}h2{font-size:12px;color:#102d54;text-transform:uppercase;letter-spacing:.05em;margin:18px 0 6px}p{border:1px solid #bdc7d2;border-radius:4px;padding:10px;min-height:42px;white-space:pre-wrap}.grid,.signature{display:grid;grid-template-columns:1fr 1fr;border:1px solid #bdc7d2}.grid div,.signature div{padding:9px 10px;border-bottom:1px solid #d7dee5}.grid div:nth-child(odd),.signature div:first-child{border-right:1px solid #d7dee5}.grid div:nth-last-child(-n+2){border-bottom:0}b{display:block;font-size:10px;text-transform:uppercase;color:#5b6878;margin-bottom:4px}span{font-size:13px}.signature{margin-top:18px}.manager{margin-top:20px}.manager>div{height:75px;border:1px solid #bdc7d2;margin-top:6px}.manager-sign{display:grid;grid-template-columns:2fr 1fr;gap:35px;margin-top:28px}.manager-sign span{border-top:1px solid #333;padding-top:5px;font-size:10px;color:#5b6878}@media print{button{display:none}}
+  </style></head><body>${forms}<script>window.onload=()=>{window.print()}<\/script></body></html>`);
+  popup.document.close();
+}
+
+function printReturnedForm(id){
+  const e = loadEntries().find(x=>x.id===id);
+  if(!e) return;
+  openPrintWindow(variancePrintSection(e), `Returned Variance - ${(e.staff || []).join(', ') || fmtDate(e.date)}`);
+}
+
+function printAllReturned(){
+  const entries = returnedEntries();
+  if(!entries.length){ alert('There are no returned forms to print.'); return; }
+  openPrintWindow(entries.map(variancePrintSection).join(''), 'Returned Variance Forms');
+}
+
+function showReturnedForms(){
+  const ids = returnedEntries().filter(e=>e.variance.receivedAutomatically).map(e=>e.id);
+  localStorage.setItem('audit_seen_returns_v1', JSON.stringify(ids));
+  renderStats();
+  document.getElementById('returnedPanel').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
 function renderStats(){
   const entries = visibleEntries();
   document.getElementById('statTotal').textContent = entries.length;
   document.getElementById('statOpen').textContent = entries.filter(e=>e.status==='open').length;
   document.getElementById('statClosed').textContent = entries.filter(e=>e.status==='closed').length;
   document.getElementById('statVariance').textContent = entries.filter(e=>!e.variance || e.variance.status==='not_sent').length;
+  document.getElementById('statAwaiting').textContent = entries.filter(e=>e.variance && e.variance.status==='sent').length;
+  document.getElementById('statReturned').textContent = entries.filter(e=>e.variance && e.variance.status==='received').length;
+
+  const autoReturns = entries.filter(e=>e.variance && e.variance.status==='received' && e.variance.receivedAutomatically);
+  const seen = new Set(JSON.parse(localStorage.getItem('audit_seen_returns_v1') || '[]'));
+  const unseen = autoReturns.filter(e=>!seen.has(e.id));
+  const alertBox = document.getElementById('returnAlert');
+  document.getElementById('returnAlertText').textContent = unseen.length
+    ? `${unseen.length} new employee variance ${unseen.length===1?'form has':'forms have'} been returned and signed.`
+    : '';
+  alertBox.classList.toggle('show', unseen.length > 0);
 }
 
 function renderMissingMost(){
@@ -1153,6 +1299,7 @@ function renderAll(){
   renderTabs();
   renderTable();
   renderStats();
+  renderReturnedForms();
   renderMissingMost();
 }
 
@@ -1559,8 +1706,8 @@ function saveSettings(){
 seedIfMissing();
 applyRealChartData();
 renderAll();
-syncAllAuditFindings().then(loadSharedAuditFindings);
-setInterval(loadSharedAuditFindings, SHARED_REFRESH_MS);
+syncAllAuditFindings().then(()=>loadSharedAuditFindings()).then(loadAcknowledgmentReturns);
+setInterval(()=>{ loadSharedAuditFindings(); loadAcknowledgmentReturns(); }, SHARED_REFRESH_MS);
 fetchCcDirectory(); // pull the real staff roster from CC in the background
 checkAckLink(); // shows the acknowledgment screen instead, if ?ack=<id> is present
 </script>
