@@ -42,6 +42,7 @@
   .return-alert{display:none;background:rgba(95,174,130,.12);border:1px solid rgba(95,174,130,.45);color:#b9e3ca;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:13px;align-items:center;justify-content:space-between;gap:12px;}
   .return-alert.show{display:flex;}
   .panel-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .line-search{background:var(--ink);border:1px solid var(--line);color:var(--text);padding:7px 10px;border-radius:6px;font:12px var(--sans);width:190px;}
 
   .tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;}
   .tab{background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:8px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;font-family:var(--sans);}
@@ -170,7 +171,7 @@
   <div class="tabs" id="tabs"></div>
 
   <div class="panel">
-    <div class="panel-head"><h2>Notifications</h2></div>
+    <div class="panel-head"><h2>Notifications</h2><input class="line-search" id="lineSearch" type="search" placeholder="Find audit line #" oninput="setLineSearch(this.value)"></div>
     <div id="tableWrap"></div>
   </div>
 
@@ -323,6 +324,7 @@ let editingId = null;
 let modalType = 'chart';
 let modalStaff = [];
 let acknowledgmentByFinding = new Map();
+let auditLineSearch = '';
 
 // ---------- storage helpers ----------
 function loadEntries(){ try{ return JSON.parse(localStorage.getItem(ENTRIES_KEY)) || []; }catch(e){ return []; } }
@@ -414,7 +416,8 @@ function auditFindingPayload(e){
     unit: e.unit || inferUnitFromText(e.context) || null,
     staff_names: e.staff || [],
     tags: (e.tags && e.tags.length) ? e.tags : deriveAuditTags(e.type, e.items),
-    variance_status: (e.variance && e.variance.status) || null
+    variance_status: (e.variance && e.variance.status) || null,
+    audit_line_number: e.auditLineNumber || null
   };
 }
 
@@ -476,6 +479,7 @@ function entryFromAuditFinding(row){
     type: row.audit_type || 'chart',
     date: row.finding_date || '',
     status: row.status || 'open',
+    auditLineNumber: row.audit_line_number || '',
     patient: '',
     mrn: '',
     unit: row.unit || '',
@@ -502,6 +506,7 @@ function mergeSharedEntries(localEntries, sharedEntries){
         ...shared,
         ...(keepLocalDetails ? entry : {}),
         status: shared.status || entry.status || 'open',
+        auditLineNumber: shared.auditLineNumber || entry.auditLineNumber || '',
         patient: keepLocalDetails ? entry.patient : shared.patient,
         mrn: keepLocalDetails ? entry.mrn : shared.mrn,
         issue: keepLocalDetails ? (entry.issue || shared.issue) : shared.issue,
@@ -523,7 +528,7 @@ function mergeSharedEntries(localEntries, sharedEntries){
 async function loadSharedAuditFindings(){
   try {
     const cutoff = lookbackDate(SHARED_LOOKBACK_DAYS);
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast`, {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast`, {
       headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
     });
     if(!r.ok) return;
@@ -697,7 +702,8 @@ function collectImportTags(row){
     'date','auditdate','observationdate','entrydate','createddate','type','audittype',
     'unit','floor','location','department','status','patient','patientname','initials',
     'mrn','mr','medicalrecordnumber','staff','staffname','staffnames','employee','employees',
-    'comments','comment','issue','issues','notes','note','finding','description'
+    'comments','comment','issue','issues','notes','note','finding','description',
+    'line','linenumber','auditline','auditlinenumber'
   ]);
   for(const header of row._headers || []){
     const key = normKey(header);
@@ -737,12 +743,14 @@ function entryFromImportRow(row){
   const items = checklistItemsFromImport(type, row);
   const unit = inferUnitFromText(unitText || context);
   const sourceId = pickImportValue(row, ['Row ID','RowID','Smartsheet Row ID','ID']);
+  const auditLineNumber = pickImportValue(row, ['Audit Line Number','Audit Line #','Line Number','Line #','Audit Line']);
   const idSeed = sourceId || [type,date,unit,patient,mrn,issue,tags.join('|')].join('|');
   return {
     id: sourceId ? `ss_${simpleHash(sourceId)}` : `import_${type}_${date}_${simpleHash(idSeed)}`,
     type,
     date,
     status,
+    auditLineNumber,
     patient,
     mrn,
     context,
@@ -863,7 +871,7 @@ async function checkAckLink(){
 
   let row;
   try {
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=*,audit_findings(audit_type,finding_date,unit,tags)&id=eq.${encodeURIComponent(ackId)}`, {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=*,audit_findings(audit_type,finding_date,unit,tags,audit_line_number)&id=eq.${encodeURIComponent(ackId)}`, {
       headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
     });
     if(!r.ok) throw new Error('HTTP ' + r.status);
@@ -895,6 +903,7 @@ async function checkAckLink(){
     <div style="background:#1a2028;border:1px solid #2a323c;border-radius:8px;padding:14px 16px;margin:16px 0;font-size:14px;">
       <div><strong>Type:</strong> ${typeLabel}</div>
       <div><strong>Date:</strong> ${f.finding_date || '—'}</div>
+      ${f.audit_line_number ? `<div><strong>Audit line #:</strong> ${escapeHtml(f.audit_line_number)}</div>` : ''}
       ${f.unit ? `<div><strong>Unit:</strong> ${f.unit}</div>` : ''}
       ${(f.tags && f.tags.length) ? `<div><strong>Category:</strong> ${f.tags.join(', ')}</div>` : ''}
     </div>
@@ -1033,6 +1042,7 @@ function smartsheetLookupText(e, source){
   return [
     'Source: ' + source.name,
     rowId ? 'Smartsheet row ID: ' + rowId : '',
+    e.auditLineNumber ? 'Audit line #: ' + e.auditLineNumber : '',
     'Date: ' + fmtDate(e.date),
     'Type: ' + (AUDIT_TYPES[e.type]?.label || e.type || ''),
     'Issue: ' + summarize(e),
@@ -1107,7 +1117,8 @@ function varianceLabel(v){
 
 function renderTable(){
   const all = visibleEntries();
-  const entries = (currentTab==='all' ? all : all.filter(e=>e.type===currentTab))
+  const tabEntries = currentTab==='all' ? all : all.filter(e=>e.type===currentTab);
+  const entries = tabEntries.filter(e=>!auditLineSearch || String(e.auditLineNumber || '').toLowerCase().includes(auditLineSearch))
     .sort((a,b)=> (b.date||'').localeCompare(a.date||''));
   const wrap = document.getElementById('tableWrap');
 
@@ -1119,6 +1130,7 @@ function renderTable(){
   let rows = entries.map(e=>`
     <tr>
       <td>${fmtDate(e.date)}</td>
+      <td class="mrn">${escapeHtml(e.auditLineNumber || '—')}</td>
       <td><span class="type-pill">${AUDIT_TYPES[e.type]?.short || e.type}</span></td>
       <td>${patientCell(e)}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${e.unit})</span>` : ''}</td>
       <td class="mrn">${mrnCell(e)}</td>
@@ -1144,11 +1156,16 @@ function renderTable(){
   wrap.innerHTML = `
     <table class="notifications-table">
       <thead><tr>
-        <th>Date</th><th>Type</th><th>Patient</th><th>MR#</th><th>Issue</th><th>Staff</th><th>Status</th><th>Variance</th><th></th>
+        <th>Date</th><th>Line #</th><th>Type</th><th>Patient</th><th>MR#</th><th>Issue</th><th>Staff</th><th>Status</th><th>Variance</th><th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
+}
+
+function setLineSearch(value){
+  auditLineSearch = String(value || '').trim().toLowerCase();
+  renderTable();
 }
 
 function returnedEntries(){
@@ -1183,9 +1200,11 @@ function variancePrintSection(e){
       <div><b>Employee</b><span>${escapeHtml(employee)}</span></div>
       <div><b>Audit type</b><span>${escapeHtml(AUDIT_TYPES[e.type]?.label || e.type)}</span></div>
       <div><b>Audit date</b><span>${escapeHtml(fmtDate(e.date))}</span></div>
+      <div><b>Audit line #</b><span>${escapeHtml(e.auditLineNumber || '—')}</span></div>
       <div><b>Date returned</b><span>${escapeHtml(fmtDate(e.variance && e.variance.dateReceived))}</span></div>
       <div><b>Unit</b><span>${escapeHtml(e.unit || '3B/3C')}</span></div>
       <div><b>Follow-up status</b><span>${escapeHtml(e.status==='closed' ? 'Closed' : 'Open')}</span></div>
+      <div><b>Audit record ID</b><span>${escapeHtml(e.id || '—')}</span></div>
     </div>
     <h2>Finding</h2><p>${escapeHtml(summarize(e) || '—')}</p>
     <h2>Employee response</h2><p>${escapeHtml(response)}</p>
@@ -1412,10 +1431,14 @@ function renderModalBody(entry){
         ${Object.keys(AUDIT_TYPES).map(t=>`<option value="${t}" ${t===type?'selected':''}>${AUDIT_TYPES[t].label}</option>`).join('')}
       </select>
     </div>
-    <div class="field-row">
+    <div class="field-row3">
       <div class="field">
         <label>Date</label>
         <input type="date" id="fDate" value="${entry?.date || new Date().toISOString().slice(0,10)}">
+      </div>
+      <div class="field">
+        <label>Audit Line #</label>
+        <input type="text" id="fAuditLineNumber" value="${escapeHtml(entry?.auditLineNumber || '')}" placeholder="e.g. 27">
       </div>
       <div class="field">
         <label>Status</label>
@@ -1528,6 +1551,7 @@ async function saveEntry(){
   const data = {
     type,
     date: document.getElementById('fDate').value,
+    auditLineNumber: document.getElementById('fAuditLineNumber').value.trim(),
     status: document.getElementById('fStatus').value,
     patient: document.getElementById('fPatient').value.trim(),
     mrn: document.getElementById('fMRN').value.trim(),
@@ -1598,6 +1622,7 @@ function sendToVarianceForm(id){
     type: AUDIT_TO_VARIANCE_TYPE[e.type] || '',
     staff: staffName,
     date: e.date || '',
+    auditLineNumber: e.auditLineNumber || '',
     mrn: e.mrn || '',
     issue: e.issue || '',
     context: e.context || (AUDIT_TYPES[e.type]?.label || e.type)
@@ -1618,6 +1643,7 @@ function sendVariance(id){
   const bodyLines = [
     `Audit type: ${AUDIT_TYPES[e.type]?.label || e.type}`,
     `Date: ${fmtDate(e.date)}`,
+    e.auditLineNumber ? `Audit line #: ${e.auditLineNumber}` : null,
     e.patient ? `Patient: ${e.patient}` : null,
     e.mrn ? `MR#: ${e.mrn}` : null,
     e.context ? `Context: ${e.context}` : null,
