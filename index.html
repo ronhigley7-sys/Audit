@@ -473,7 +473,9 @@ function lookbackDate(days){
 function entryFromAuditFinding(row){
   const tags = asArray(row.tags);
   const staff = asArray(row.staff_names);
-  const label = tags.length ? `Shared finding: ${tags.join(', ')}` : 'Shared audit finding';
+  const label = tags.length
+    ? `${row.audit_type === 'pain' ? 'Why pain requirement was missed' : 'Specific variance'}: ${tags.join(', ')}`
+    : (row.audit_type === 'pain' ? 'Reason not recorded in Smartsheet' : 'Specific variance not recorded in Smartsheet');
   return {
     id: row.id,
     type: row.audit_type || 'chart',
