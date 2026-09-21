@@ -86,6 +86,27 @@
     .panel{overflow-x:auto;}
     .notifications-table{min-width:1120px;}
   }
+  @media(max-width:700px){
+    body{overflow-x:hidden;}
+    header{padding:18px 14px;gap:14px;align-items:flex-start;}
+    header h1{font-size:22px;}
+    .panel{overflow:visible;}
+    .panel-head{align-items:flex-start;gap:10px;flex-direction:column;}
+    .line-search{width:100%;}
+    .notifications-table{display:block;min-width:0;width:100%;}
+    .notifications-table thead{display:none;}
+    .notifications-table tbody{display:block;padding:10px;}
+    .notifications-table tr{display:block;background:var(--ink);border:1px solid var(--line);border-radius:10px;margin-bottom:12px;padding:6px 12px;overflow:hidden;}
+    .notifications-table tr:last-child{margin-bottom:0;}
+    .notifications-table td{display:grid;grid-template-columns:92px minmax(0,1fr);gap:10px;width:100%;min-width:0!important;padding:9px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere;}
+    .notifications-table td:last-child{border-bottom:0;}
+    .notifications-table td::before{content:attr(data-label);font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:2px;}
+    .notifications-table .issue-cell{width:100%;min-width:0;line-height:1.45;}
+    .notifications-table .actions-cell{display:block;width:100%;min-width:0;padding-top:12px;}
+    .notifications-table .actions-cell::before{display:block;margin-bottom:9px;}
+    .row-actions{min-width:0;gap:8px;}
+    .row-actions button{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:7px 9px;text-decoration:none;font-size:11px;}
+  }
 
   /* missing-most panel */
   .missing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;padding:18px 20px;}
@@ -1131,16 +1152,16 @@ function renderTable(){
 
   let rows = entries.map(e=>`
     <tr>
-      <td>${fmtDate(e.date)}</td>
-      <td class="mrn">${escapeHtml(e.auditLineNumber || '—')}</td>
-      <td><span class="type-pill">${AUDIT_TYPES[e.type]?.short || e.type}</span></td>
-      <td>${patientCell(e)}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${e.unit})</span>` : ''}</td>
-      <td class="mrn">${mrnCell(e)}</td>
-      <td class="issue-cell">${summarize(e)}</td>
-      <td>${staffChips(e.staff)}</td>
-      <td><span class="status-pill status-${e.status}">${e.status==='open'?'Open':'Closed'}</span></td>
-      <td>${varianceLabel(e.variance)}</td>
-      <td class="row-actions actions-cell">
+      <td data-label="Date">${fmtDate(e.date)}</td>
+      <td data-label="Line #" class="mrn">${escapeHtml(e.auditLineNumber || '—')}</td>
+      <td data-label="Type"><span class="type-pill">${AUDIT_TYPES[e.type]?.short || e.type}</span></td>
+      <td data-label="Patient">${patientCell(e)}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${e.unit})</span>` : ''}</td>
+      <td data-label="MR#" class="mrn">${mrnCell(e)}</td>
+      <td data-label="Issue" class="issue-cell">${summarize(e)}</td>
+      <td data-label="Staff">${staffChips(e.staff)}</td>
+      <td data-label="Status"><span class="status-pill status-${e.status}">${e.status==='open'?'Open':'Closed'}</span></td>
+      <td data-label="Variance">${varianceLabel(e.variance)}</td>
+      <td data-label="Actions" class="row-actions actions-cell">
         <button onclick="editEntry('${e.id}')">Edit</button>
         <button onclick="sendVariance('${e.id}')" title="Open the variance email without changing its status">Open Email</button>
         <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the source Smartsheet and copy row lookup details">Smartsheet</button>
