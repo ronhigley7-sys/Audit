@@ -4,7 +4,7 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6Ik
 
 const SOURCE_SEARCHES = [
   { type: 'chart', terms: ['NPI Chart Audits', 'Chart Audits', 'Chart Audit Non-Compliance'] },
-  { type: 'pain', terms: ['Pain Reassessment Audit', 'Pain Reassessment'] },
+  { type: 'pain', terms: ['Pain Reassessment Audits', 'Pain Reassessment Audit', 'Pain Reassessment Non-Compliance', 'Pain Reassessment'] },
   { type: 'sitter', terms: ['Sitter Audit', 'Sitter Audits'] },
   { type: 'behavioral', terms: ['Behavioral Health Audit', 'Behavioral Health Audits', 'Suicide Audit', 'C-SSRS Audit'] }
 ];
@@ -77,6 +77,63 @@ function collectTags(row) {
   return [...new Set(tags)];
 }
 
+function textValue(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function valueIsNegative(value) {
+  const text = textValue(value);
+  if (!text) return false;
+  if (['no', 'n', 'false', 'not met', 'fail', 'failed', 'late', 'missing', 'incomplete', 'non-compliant', 'noncompliant', '0'].includes(text)) return true;
+  return text.includes('not met') || text.includes('not completed') || text.includes('incomplete') ||
+    text.includes('non-compliant') || text.includes('non compliant') || text.includes('noncompliant') ||
+    text.includes('missing') || text.includes('late') || text.includes('fail');
+}
+
+function titleLooksLikePainRequirement(title) {
+  const text = textValue(title);
+  return text.includes('pain') || text.includes('reassess') || text.includes('admission') ||
+    text.includes('goal') || text.includes('timeframe') || text.includes('within') ||
+    text.includes('intervention') || text.includes('effectiveness') || text.includes('compliance');
+}
+
+function inferNegativeTags(row, type) {
+  const tags = [];
+  const titles = row.__titles || {};
+  for (const [key, value] of Object.entries(row)) {
+    if (key.startsWith('__')) continue;
+    const title = titles[key] || key;
+    if (type === 'pain' && titleLooksLikePainRequirement(title) && valueIsNegative(value)) tags.push(title);
+  }
+  return tags;
+}
+
+function collectStaff(row) {
+  const aliases = [
+    'Staff', 'Staff Name', 'Staff Names', 'Employee', 'Employees', 'Employee Name',
+    'RN', 'RN Name', 'Nurse', 'Nurse Name', 'Primary RN', 'Assigned RN', 'Responsible RN',
+    'Audited RN', 'Audited Nurse', 'Audited Staff', 'Caregiver', 'Clinician', 'CA', 'Tech', 'Technician'
+  ];
+  const names = [];
+  for (const alias of aliases) {
+    const value = row[normKey(alias)];
+    if (value === undefined || value === null || !String(value).trim()) continue;
+    splitList(value).forEach(name => names.push(name));
+  }
+  return [...new Set(names)];
+}
+
+function collectReasons(row, type) {
+  const reasons = [...collectTags(row), ...inferNegativeTags(row, type)];
+  const explicit = pick(row, [
+    'Why Missed', 'Reason Missed', 'Reason for Missed Reassessment', 'Reason for Non-Compliance',
+    'Reason for Noncompliance', 'Non-Compliance Reason', 'Noncompliance Reason',
+    'Variance Reason', 'Specific Variance', 'Audit Finding', 'Finding'
+  ]);
+  splitList(explicit, true).forEach(reason => reasons.push(reason));
+  return [...new Set(reasons.map(value => String(value || '').trim()).filter(Boolean))];
+}
+
 async function smartsheet(path) {
   const response = await fetch(`https://api.smartsheet.com/2.0/${path}`, {
     headers: { Authorization: `Bearer ${SMARTSHEET_TOKEN}` }
@@ -91,8 +148,19 @@ async function findSource(term) {
   const result = await smartsheet(`search?query=${encodeURIComponent(term)}`);
   const candidates = (result.results || [])
     .filter(item => ['sheet', 'report'].includes(String(item.objectType || '').toLowerCase()))
-    .filter(item => String(item.name || '').toLowerCase().includes(term.toLowerCase().split(' ')[0]));
-  return candidates[0] || null;
+    .filter(item => String(item.name || item.text || '').toLowerCase().includes(term.toLowerCase().split(' ')[0]))
+    .map(item => {
+      const name = String(item.name || item.text || '').toLowerCase();
+      const wanted = term.toLowerCase();
+      let score = name === wanted ? 100 : (name.includes(wanted) ? 60 : 0);
+      if (name.includes('audit')) score += 20;
+      if (name.includes('non-compliance') || name.includes('non compliance') || name.includes('finding') || name.includes('variance')) score += 30;
+      if (String(item.objectType || '').toLowerCase() === 'report') score += 5;
+      if (name.includes('landing page') || name.includes('dashboard') || name.includes('summary')) score -= 25;
+      return { item, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  return candidates[0]?.item || null;
 }
 
 async function fetchSource(source) {
@@ -104,12 +172,14 @@ async function fetchSource(source) {
 
 function rowToObject(sourceData, row) {
   const columns = new Map((sourceData.columns || []).map(col => [col.id, col.title]));
-  const out = {};
+  const out = { __titles: {} };
   for (const cell of row.cells || []) {
     const title = columns.get(cell.columnId);
     if (!title) continue;
     const value = cell.displayValue ?? cell.value ?? '';
-    out[normKey(title)] = String(value || '').trim();
+    const key = normKey(title);
+    out[key] = String(value || '').trim();
+    out.__titles[key] = title;
   }
   return out;
 }
@@ -118,10 +188,10 @@ function findingFromRow(row, fallbackType, sourceName, rowId) {
   const date = normalizeDate(pick(row, ['Audit Date', 'Date', 'Observation Date', 'Entry Date', 'Created Date']));
   if (!date) return null;
   const type = normalizeType(pick(row, ['Audit Type', 'Type', 'Audit', 'Form', 'Category']) || sourceName, fallbackType);
-  const unitText = pick(row, ['Unit', 'Floor', 'Location', 'Department', 'Area']);
+  const unitText = pick(row, ['Unit', 'Nursing Unit', 'Home Unit', 'Floor', 'Location', 'Department', 'Area']);
   const context = pick(row, ['Context', 'Shift', 'Room', 'Visit', 'Visit Number']) || unitText;
-  const tags = collectTags(row);
-  const staff = splitList(pick(row, ['Staff', 'Staff Name', 'Staff Names', 'Employee', 'Employees', 'RN', 'CA', 'Tech']));
+  const tags = collectReasons(row, type);
+  const staff = collectStaff(row);
   const status = pick(row, ['Status', 'Follow Up Status']).toLowerCase() === 'closed' ? 'closed' : 'open';
   return {
     id: `ss_${type}_${rowId}`,
