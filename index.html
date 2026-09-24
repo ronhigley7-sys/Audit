@@ -169,6 +169,7 @@
     <p class="sub">Chart Audits, Sitter Audits, Behavioral Health Audits, and Pain Reassessment Audits from Smartsheet — logged manually.</p>
   </div>
   <div class="header-actions">
+    <button class="ghost" onclick="refreshSharedAuditData()">Refresh</button>
     <button class="ghost" onclick="openSettings()">Settings</button>
     <button class="primary" onclick="openModal()">+ Add entry</button>
   </div>
@@ -177,6 +178,8 @@
 <main>
   <div class="stats">
     <div class="stat"><div class="n" id="statTotal">0</div><div class="l">Total logged</div></div>
+    <div class="stat"><div class="n" id="statChart">0</div><div class="l">Chart audits</div></div>
+    <div class="stat"><div class="n" id="statUnit">0</div><div class="l">Unit audits</div></div>
     <div class="stat open"><div class="n" id="statOpen">0</div><div class="l">Open follow-up</div></div>
     <div class="stat closed"><div class="n" id="statClosed">0</div><div class="l">Closed</div></div>
     <div class="stat variance"><div class="n" id="statVariance">0</div><div class="l">Variance not sent</div></div>
@@ -289,6 +292,7 @@ const CC_KEY = 'auditVarianceCC';
 
 const AUDIT_TYPES = {
   chart: { label: 'Chart Audit', short: 'Chart' },
+  unit: { label: 'Unit Audit', short: 'Unit' },
   sitter: { label: 'Sitter Audit', short: 'Sitter' },
   behavioral: { label: 'Behavioral Health Audit', short: 'Behavioral' },
   pain: { label: 'Pain Reassessment Audit', short: 'Pain' }
@@ -298,6 +302,11 @@ const SMARTSHEET_SOURCES = {
     name: 'NPI Chart Audits',
     query: 'NPI Chart Audits',
     url: 'https://app.smartsheet.com/sheets/1183027658286980'
+  },
+  unit: {
+    name: 'Unit Audits',
+    query: 'Unit Audit PLATO Falls HAPI',
+    url: ''
   },
   pain: {
     name: 'Pain Reassessment Audits',
@@ -412,16 +421,27 @@ function deriveAuditTags(type, items){
 }
 
 function inferUnitFromText(text){
-  const match = String(text || '').match(/\b(3B|3C|3BC|4A|4B|OBS|MS OBS|MED\/SURG|MED SURG)\b/i);
+  const raw = String(text || '').trim();
+  if(!raw) return '';
+  const compact = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if(compact.includes('3B3C') || compact.includes('3BC')) return '3BC';
+  if(compact.includes('3B')) return '3B';
+  if(compact.includes('3C')) return '3C';
+  const match = raw.match(/\b(4A|4B|5D|OBS|MS OBS|MED\/SURG|MED SURG)\b/i);
   return match ? match[1].toUpperCase() : '';
 }
 
 function is3B3CUnit(entry){
-  const rawUnit = entry && (entry.unit || inferUnitFromText(entry.context));
-  const unit = String(rawUnit || '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '');
-  return unit === '3B' || unit === '3C' || unit === '3BC';
+  const raw = [
+    entry && entry.unit,
+    entry && entry.context
+  ].filter(Boolean).join(' ');
+  const compact = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if(!compact) return true;
+  if(compact.includes('3B3C') || compact.includes('3BC') || compact.includes('3B') || compact.includes('3C')) return true;
+  if(compact.includes('STROKETELE') || compact.includes('TELESTROKE')) return true;
+  if(/\b(4A|4B|5D|ICU|ED|ER|PACU|OR)\b/i.test(raw)) return false;
+  return true;
 }
 
 function visibleEntries(){
@@ -499,7 +519,7 @@ function entryFromAuditFinding(row){
     : (row.audit_type === 'pain' ? 'Reason not recorded in Smartsheet' : 'Specific variance not recorded in Smartsheet');
   return {
     id: row.id,
-    type: row.audit_type || 'chart',
+    type: normalizeAuditType(row.audit_type || 'chart'),
     date: row.finding_date || '',
     status: row.status || 'open',
     auditLineNumber: row.audit_line_number || '',
@@ -596,6 +616,39 @@ async function loadAcknowledgmentReturns(){
   } catch(e) { /* manual receipt tracking remains available */ }
 }
 
+async function refreshSharedAuditData(){
+  const button = Array.from(document.querySelectorAll('button')).find(btn => btn.textContent === 'Refresh');
+  if(button) button.textContent = 'Refreshing...';
+  await loadSharedAuditFindings();
+  await loadAcknowledgmentReturns();
+  renderAll();
+  if(button) {
+    button.textContent = 'Refresh';
+    showTemporaryStatus('Audit dashboard refreshed from shared data.');
+  }
+}
+
+function showTemporaryStatus(message){
+  let node = document.getElementById('auditRefreshMessage');
+  if(!node){
+    node = document.createElement('div');
+    node.id = 'auditRefreshMessage';
+    node.style.position = 'fixed';
+    node.style.right = '16px';
+    node.style.bottom = '16px';
+    node.style.background = 'var(--panel-2)';
+    node.style.border = '1px solid var(--line)';
+    node.style.color = 'var(--text)';
+    node.style.borderRadius = '8px';
+    node.style.padding = '10px 14px';
+    node.style.zIndex = '6000';
+    document.body.appendChild(node);
+  }
+  node.textContent = message;
+  clearTimeout(node._timer);
+  node._timer = setTimeout(()=>node.remove(), 2600);
+}
+
 async function syncAllAuditFindings(){
   const statusEl = document.getElementById('auditSyncStatus');
   const entries = loadEntries();
@@ -671,7 +724,7 @@ function csvObjects(text){
 function pickImportValue(row, keys){
   for(const key of keys){
     const value = row[normKey(key)];
-    if(value) return value;
+    if(value != null && String(value).trim()) return String(value).trim();
   }
   return '';
 }
@@ -685,9 +738,14 @@ function splitImportList(value, splitCommas){
 
 function normalizeAuditType(value){
   const text = String(value || '').toLowerCase();
+  const compact = text.replace(/[^a-z0-9]/g, '');
+  if(['chart','unit','sitter','behavioral','behavioural','pain'].includes(compact)){
+    return compact === 'behavioural' ? 'behavioral' : compact;
+  }
   if(text.includes('sitter')) return 'sitter';
   if(text.includes('behavior') || text.includes('behaviour') || text.includes('suicide') || text.includes('cssr')) return 'behavioral';
   if(text.includes('pain')) return 'pain';
+  if(text.includes('unit') || text.includes('plato') || text.includes('round') || text.includes('fall') || text.includes('hapi') || text.includes('skin') || text.includes('pressure') || text.includes('safety')) return 'unit';
   return 'chart';
 }
 
@@ -752,21 +810,22 @@ function checklistItemsFromImport(type, row){
 }
 
 function entryFromImportRow(row){
-  const type = normalizeAuditType(pickImportValue(row, ['Audit Type','Type','Audit','Form','Category']));
-  const date = normalizeImportDate(pickImportValue(row, ['Audit Date','Date','Observation Date','Entry Date','Created Date']));
+  const type = normalizeAuditType(pickImportValue(row, ['Audit Type','Audit Name','Audit Category','Type','Audit','Form','Form Type','Category','Source','Sheet','Worksheet']));
+  const date = normalizeImportDate(pickImportValue(row, ['Audit Date','Date','Observation Date','Entry Date','Created Date','Submission Date','Submitted Date','Completed Date']));
   if(!date) return null;
-  const unitText = pickImportValue(row, ['Unit','Floor','Location','Department','Area']);
-  const context = pickImportValue(row, ['Context','Shift','Room','Visit','Visit Number']) || unitText;
-  const issue = pickImportValue(row, ['Issue','Comments','Comment','Notes','Finding','Description']);
-  const patient = pickImportValue(row, ['Patient','Patient Name','Initials']);
-  const mrn = pickImportValue(row, ['MRN','MR#','MR','Medical Record Number']);
-  const status = pickImportValue(row, ['Status','Follow Up Status']).toLowerCase() === 'closed' ? 'closed' : 'open';
-  const staff = splitImportList(pickImportValue(row, ['Staff','Staff Name','Staff Names','Employee','Employees','RN','CA','Tech']), false);
+  const unitText = pickImportValue(row, ['Unit','Nursing Unit','Unit Name','Floor','Location','Department','Area']);
+  const context = pickImportValue(row, ['Context','Shift','Room','Visit','Visit Number','Patient Room']) || unitText;
+  const issue = pickImportValue(row, ['Issue','Issues','Comments','Comment','Notes','Finding','Shared Finding','Audit Finding','Description','Details','Variance','Variance Details','Details of Variance','Deficiency','What Was Missed','Reason Missed']);
+  const patient = pickImportValue(row, ['Patient','Patient Name','Patient Initials','Initials']);
+  const mrn = pickImportValue(row, ['MRN','MR#','MR','Medical Record Number','Medical Record #']);
+  const statusText = pickImportValue(row, ['Status','Follow Up Status','Follow-Up Status']).toLowerCase();
+  const status = (statusText.includes('closed') || statusText.includes('complete')) ? 'closed' : 'open';
+  const staff = splitImportList(pickImportValue(row, ['Staff','Staff Name','Staff Names','Employee','Employees','Employee Involved','Staff Involved','Nurse','RN','CA','Tech']), false);
   const tags = collectImportTags(row);
   const items = checklistItemsFromImport(type, row);
   const unit = inferUnitFromText(unitText || context);
-  const sourceId = pickImportValue(row, ['Row ID','RowID','Smartsheet Row ID','ID']);
-  const auditLineNumber = pickImportValue(row, ['Audit Line Number','Audit Line #','Line Number','Line #','Audit Line']);
+  const sourceId = pickImportValue(row, ['Row ID','RowID','Smartsheet Row ID','Smartsheet Row Number','Source ID','ID']);
+  const auditLineNumber = pickImportValue(row, ['Audit Line Number','Audit Line #','Line Number','Line #','Audit Line','Audit #','Record Number']);
   const idSeed = sourceId || [type,date,unit,patient,mrn,issue,tags.join('|')].join('|');
   return {
     id: sourceId ? `ss_${simpleHash(sourceId)}` : `import_${type}_${date}_${simpleHash(idSeed)}`,
@@ -1268,6 +1327,8 @@ function showReturnedForms(){
 function renderStats(){
   const entries = visibleEntries();
   document.getElementById('statTotal').textContent = entries.length;
+  document.getElementById('statChart').textContent = entries.filter(e=>e.type==='chart').length;
+  document.getElementById('statUnit').textContent = entries.filter(e=>e.type==='unit').length;
   document.getElementById('statOpen').textContent = entries.filter(e=>e.status==='open').length;
   document.getElementById('statClosed').textContent = entries.filter(e=>e.status==='closed').length;
   document.getElementById('statVariance').textContent = entries.filter(e=>!e.variance || e.variance.status==='not_sent').length;
@@ -1321,6 +1382,26 @@ function renderMissingMost(){
     html += `</div>`;
   });
 
+  const unitEntries = entries.filter(e=>e.type==='unit');
+  const unitCounts = {};
+  unitEntries.forEach(e=>{
+    (e.tags && e.tags.length ? e.tags : [e.issue || 'Unspecified']).forEach(tag=>{
+      unitCounts[tag] = (unitCounts[tag]||0)+1;
+    });
+  });
+  const unitMax = Math.max(1, ...Object.values(unitCounts));
+  const unitRanked = Object.entries(unitCounts).sort((a,b)=>b[1]-a[1]);
+  html += `<div class="missing-card"><h3>Unit Audit — by variance/category</h3>`;
+  if(unitRanked.length===0){
+    html += `<div class="missing-empty">No unit audit issues logged yet.</div>`;
+  } else {
+    unitRanked.forEach(([label,count])=>{
+      const pct = Math.round((count/unitMax)*100);
+      html += `<div class="missing-row"><span>${escapeHtml(label)}</span><span class="missing-bar"><i style="width:${pct}%"></i></span><span class="missing-count">${count}</span></div>`;
+    });
+  }
+  html += `</div>`;
+
   // Chart audits: tally by Smartsheet's own AD/CP/Pain non-compliance reason categories
   const chartEntries = entries.filter(e=>e.type==='chart');
   const chartCounts = {};
@@ -1337,7 +1418,7 @@ function renderMissingMost(){
   } else {
     chartRanked.forEach(([label,count])=>{
       const pct = Math.round((count/chartMax)*100);
-      html += `<div class="missing-row"><span>${label}</span><span class="missing-bar"><i style="width:${pct}%"></i></span><span class="missing-count">${count}</span></div>`;
+      html += `<div class="missing-row"><span>${escapeHtml(label)}</span><span class="missing-bar"><i style="width:${pct}%"></i></span><span class="missing-count">${count}</span></div>`;
     });
   }
   html += `</div>`;
