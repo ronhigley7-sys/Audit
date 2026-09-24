@@ -153,9 +153,8 @@
 </head>
 <body>
 
-<!-- Employee acknowledgment view — shown instead of the normal tracker when
-     opened via a ?ack=<id> link. No patient/issue detail loaded or shown here,
-     only what's in audit_findings (type, date, unit, tags). -->
+<!-- Compatibility container for old acknowledgment links. Online acknowledgments
+     are disabled in local work-computer mode. -->
 <div id="ackScreen" style="display:none;position:fixed;inset:0;background:#0b0f14;z-index:5000;overflow-y:auto;">
   <div style="max-width:520px;margin:40px auto;background:#12181f;border:1px solid #2a323c;border-radius:12px;padding:28px;font-family:var(--sans, Arial, sans-serif);color:#e6e9ee;">
     <div id="ackContent">Loading…</div>
@@ -169,7 +168,7 @@
     <p class="sub">Chart Audits, Sitter Audits, Behavioral Health Audits, and Pain Reassessment Audits from Smartsheet — logged manually.</p>
   </div>
   <div class="header-actions">
-    <button class="ghost" onclick="refreshSharedAuditData()">Refresh</button>
+    <button class="ghost" onclick="refreshLocalAuditData()">Refresh</button>
     <button class="ghost" onclick="openSettings()">Settings</button>
     <button class="primary" onclick="openModal()">+ Add entry</button>
   </div>
@@ -212,7 +211,7 @@
     <div class="missing-grid" id="missingGrid"></div>
   </div>
 
-  <p class="foot-note">Showing shared audit summaries from the last 60 days. Patient name, MR#, and free-text issue details stay on the computer where they were entered unless secure full-entry storage is added.</p>
+  <p class="foot-note">Local work-computer mode. Entries and any patient identifiers stay in this browser on this computer. This page does not sync audit rows or staff names to CC/Supabase.</p>
 </main>
 
 <!-- Entry modal -->
@@ -248,7 +247,7 @@
           <input type="text" id="newDirName" placeholder="Add a name to the directory">
           <button class="ghost small" onclick="addToDirectory()">Add</button>
         </div>
-        <p class="hint">The staff picker on each entry pulls your real roster from CC automatically. Add names here only for people not in CC (agency, travelers, etc).</p>
+        <p class="hint">Local-only staff list. Add names here, then use them in each audit entry. This page no longer pulls staff from CC.</p>
       </div>
       <div class="field">
         <label>Variance form — CC recipients</label>
@@ -256,11 +255,10 @@
         <p class="hint">Comma-separated. Used to pre-fill "Send variance form" emails.</p>
       </div>
       <div class="field">
-        <label>Sync to Command Center</label>
-        <p class="hint" style="margin-bottom:8px;">Sends a de-identified copy of each finding (type, date, unit, tagged staff, status) to the same Supabase project Command Center uses, so findings show up on a staff member's profile there. Patient name, MRN, visit number, and the issue description are never sent.</p>
+        <label>Local work-computer mode</label>
+        <p class="hint" style="margin-bottom:8px;">CC/Supabase sync is disconnected. Use the local PHI Command Center file for protected patient/MRN details and this page only for the local browser copy you enter here.</p>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button class="ghost small" onclick="syncAllAuditFindings()">🔄 Sync all entries to CC now</button>
-          <span id="auditSyncStatus" class="hint" style="margin:0;"></span>
+          <span id="auditSyncStatus" class="hint" style="margin:0;">Nothing is sent to CC from this page.</span>
         </div>
       </div>
       <div class="field">
@@ -272,10 +270,10 @@
         <label>Import latest Smartsheet export</label>
         <input type="file" id="auditImportFile" accept=".csv,text/csv">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
-          <button class="ghost small" onclick="importAuditCsv()">Import CSV to shared list</button>
+          <button class="ghost small" onclick="importAuditCsv()">Import CSV to this computer</button>
           <span id="auditImportStatus" class="hint" style="margin:0;"></span>
         </div>
-        <p class="hint">Export the Smartsheet report as CSV, then import it here. The shared list stores only date, audit type, unit, staff names, status, and category/reason tags.</p>
+        <p class="hint">Export the Smartsheet report as CSV, then import it here. Imported data stays in this browser on this work computer.</p>
       </div>
     </div>
     <div class="modal-foot">
@@ -369,28 +367,14 @@ function escapeHtml(value){
   })[ch]);
 }
 
-// ---------- CC staff directory (pulled from the same Supabase project CC uses) ----------
-let _ccDirectoryCache = null; // array of names, or null if not yet loaded
+// ---------- Local staff directory ----------
+let _ccDirectoryCache = []; // retained for compatibility with older saved data
 async function fetchCcDirectory(){
-  try {
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=display_name&order=display_name.asc`, {
-      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
-    });
-    if (r.ok) {
-      const rows = await r.json();
-      _ccDirectoryCache = rows.map(row => row.display_name).filter(Boolean);
-    }
-  } catch(e) { /* silent — falls back to the local directory list below */ }
-  // Refresh the picker if the Add/Edit modal happens to be open already
-  const sel = document.getElementById('staffDirSelect');
-  if (sel) rebuildStaffDirSelect();
+  showTemporaryStatus('CC staff roster is disconnected. Add staff in Settings.');
 }
-// Combined list: CC's real roster (if loaded) plus any ad-hoc names added locally
-// (agency/travelers, etc. who won't be in CC's directory).
 function combinedStaffDirectory(){
   const local = loadDirectory();
-  const cc = _ccDirectoryCache || [];
-  return Array.from(new Set([...cc, ...local])).sort((a,b)=>a.localeCompare(b));
+  return Array.from(new Set(local)).filter(Boolean).sort((a,b)=>a.localeCompare(b));
 }
 function rebuildStaffDirSelect(){
   const sel = document.getElementById('staffDirSelect');
@@ -401,12 +385,12 @@ function rebuildStaffDirSelect(){
   sel.value = prev;
 }
 
-// ---------- Supabase sync (Command Center integration) ----------
-// Same Supabase project Command Center (CC) and its other companion tools use.
-// Only de-identified fields are ever sent — see audit_findings table comment.
+// ---------- Disconnected CC/Supabase compatibility helpers ----------
+// This hosted page is local-workstation only. These helpers are retained so
+// older buttons or saved data do not error, but they no longer send or fetch data.
 const AUDIT_SB_CONFIG = {
-  url: 'https://xnsdvdfceflmagfhpycw.supabase.co',
-  key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhuc2R2ZGZjZWZsbWFnZmhweWN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0MTk1NjgsImV4cCI6MjA5NDk5NTU2OH0.UzKZQj4BLxPpH_OCwQR8LyDUeP9YlKn5UtXRFUFaYKA'
+  url: '',
+  key: ''
 };
 const SHARED_LOOKBACK_DAYS = 60;
 const SHARED_REFRESH_MS = 60000;
@@ -463,33 +447,12 @@ function auditFindingPayload(e){
 }
 
 async function pushAuditFinding(entry){
-  try {
-    lastAuditSyncError = '';
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?on_conflict=id`, {
-      method: 'POST',
-      headers: {
-        apikey: AUDIT_SB_CONFIG.key,
-        Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
-        'Content-Type': 'application/json',
-        Prefer: 'resolution=merge-duplicates,return=minimal'
-      },
-      body: JSON.stringify(auditFindingPayload(entry))
-    });
-    if(!r.ok) lastAuditSyncError = await r.text();
-    return r.ok;
-  } catch(e) {
-    lastAuditSyncError = e.message || String(e);
-  }
-  return false;
+  lastAuditSyncError = '';
+  return true;
 }
 
 async function deleteAuditFinding(id){
-  try {
-    await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?id=eq.${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
-    });
-  } catch(e) { /* silent */ }
+  return true;
 }
 
 function asArray(value){
@@ -569,62 +532,23 @@ function mergeSharedEntries(localEntries, sharedEntries){
 }
 
 async function loadSharedAuditFindings(){
-  try {
-    const cutoff = lookbackDate(SHARED_LOOKBACK_DAYS);
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast`, {
-      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
-    });
-    if(!r.ok) return;
-    const rows = await r.json();
-    const sharedEntries = rows.map(entryFromAuditFinding).filter(is3B3CUnit);
-    saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
-    renderAll();
-  } catch(e) { /* local entries still work if the shared table is unavailable */ }
+  return;
 }
 
 // Employee sign-offs are the authoritative cross-computer return signal.
 // A signed acknowledgment automatically changes the matching variance to
 // Received and supplies the employee response/signature for viewing/printing.
 async function loadAcknowledgmentReturns(){
-  try {
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=id,finding_id,staff_name,status,comment,signed_name,signed_at,created_at&status=eq.acknowledged&order=signed_at.desc.nullslast`, {
-      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
-    });
-    if(!r.ok) return;
-    const rows = await r.json();
-    acknowledgmentByFinding = new Map();
-    rows.forEach(row=>{
-      if(row.finding_id && !acknowledgmentByFinding.has(row.finding_id)) acknowledgmentByFinding.set(row.finding_id, row);
-    });
-
-    const entries = loadEntries();
-    let changed = false;
-    entries.forEach(entry=>{
-      const ack = acknowledgmentByFinding.get(entry.id);
-      if(!ack) return;
-      entry.variance = entry.variance || {};
-      const receivedDate = ack.signed_at ? ack.signed_at.slice(0,10) : new Date().toISOString().slice(0,10);
-      if(entry.variance.status !== 'received' || entry.variance.dateReceived !== receivedDate){
-        entry.variance.status = 'received';
-        entry.variance.dateReceived = receivedDate;
-        entry.variance.receivedAutomatically = true;
-        changed = true;
-      }
-    });
-    if(changed) saveEntries(entries);
-    renderAll();
-  } catch(e) { /* manual receipt tracking remains available */ }
+  return;
 }
 
-async function refreshSharedAuditData(){
+async function refreshLocalAuditData(){
   const button = Array.from(document.querySelectorAll('button')).find(btn => btn.textContent === 'Refresh');
   if(button) button.textContent = 'Refreshing...';
-  await loadSharedAuditFindings();
-  await loadAcknowledgmentReturns();
   renderAll();
   if(button) {
     button.textContent = 'Refresh';
-    showTemporaryStatus('Audit dashboard refreshed from shared data.');
+    showTemporaryStatus('Audit dashboard refreshed from this browser.');
   }
 }
 
@@ -652,26 +576,8 @@ function showTemporaryStatus(message){
 async function syncAllAuditFindings(){
   const statusEl = document.getElementById('auditSyncStatus');
   const entries = loadEntries();
-  if (statusEl) statusEl.textContent = `Syncing 0 / ${entries.length}…`;
-  let ok = 0;
-  for (let i = 0; i < entries.length; i++) {
-    try {
-      const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?on_conflict=id`, {
-        method: 'POST',
-        headers: {
-          apikey: AUDIT_SB_CONFIG.key,
-          Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
-          'Content-Type': 'application/json',
-          Prefer: 'resolution=merge-duplicates,return=minimal'
-        },
-        body: JSON.stringify(auditFindingPayload(entries[i]))
-      });
-      if (r.ok) ok++;
-    } catch(e) { /* keep going */ }
-    if (statusEl) statusEl.textContent = `Syncing ${i+1} / ${entries.length}…`;
-  }
-  if (statusEl) statusEl.textContent = `✓ Synced ${ok} / ${entries.length} entries to CC.`;
-  return ok;
+  if (statusEl) statusEl.textContent = `Local-only mode: ${entries.length} entries remain on this computer.`;
+  return entries.length;
 }
 
 function parseCsv(text){
@@ -865,16 +771,7 @@ async function importAuditCsv(){
     imported.forEach(entry => byId.set(entry.id, {...(byId.get(entry.id) || {}), ...entry}));
     saveEntries(Array.from(byId.values()));
     renderAll();
-
-    let synced = 0;
-    for(const entry of imported){
-      if(await pushAuditFinding(entry)) synced++;
-    }
-    await loadSharedAuditFindings();
-    if(statusEl) statusEl.textContent = `Imported ${imported.length}; shared ${synced}.`;
-    if(synced < imported.length){
-      alert(`Imported ${imported.length} rows locally, but only ${synced} updated the shared list. Try Settings > Sync all entries to CC now.`);
-    }
+    if(statusEl) statusEl.textContent = `Imported ${imported.length} rows to this computer.`;
   } catch(err){
     if(statusEl) statusEl.textContent = `Import failed: ${err.message}`;
     alert('CSV import failed: ' + err.message);
@@ -885,61 +782,7 @@ async function importAuditCsv(){
 const AUDIT_TYPE_LABELS = { chart:'Chart Audit', sitter:'Sitter Audit', behavioral:'Behavioral Health Audit', pain:'Pain Reassessment Audit' };
 
 async function sendAcknowledgment(id){
-  const e = loadEntries().find(x=>x.id===id);
-  if(!e) return;
-  const staffList = e.staff || [];
-  if(!staffList.length){ alert('Tag a staff member on this entry first (Edit \u2192 Staff Involved).'); return; }
-  let staffName = staffList[0];
-  if(staffList.length > 1){
-    const choice = prompt('Send to which staff member?\n' + staffList.map((s,i)=>`${i+1}. ${s}`).join('\n'), '1');
-    const idx = parseInt(choice) - 1;
-    if(isNaN(idx) || !staffList[idx]) return;
-    staffName = staffList[idx];
-  }
-
-  // Make sure this entry's de-identified summary exists in audit_findings first
-  // (the acknowledgment row references it by id).
-  await pushAuditFinding(e);
-
-  let ackId;
-  try {
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
-      method: 'POST',
-      headers: {
-        apikey: AUDIT_SB_CONFIG.key,
-        Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=representation'
-      },
-      body: JSON.stringify({ finding_id: e.id, staff_name: staffName, requested_by: 'Ron Higley', status: 'pending' })
-    });
-    if(!r.ok) throw new Error('HTTP ' + r.status);
-    const rows = await r.json();
-    ackId = rows[0].id;
-  } catch(err){
-    alert('Could not create the acknowledgment request: ' + err.message);
-    return;
-  }
-
-  const link = window.location.href.split('?')[0] + '?ack=' + ackId;
-  let email = '';
-  try {
-    const r2 = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=email&display_name=eq.${encodeURIComponent(staffName)}`, {
-      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
-    });
-    if(r2.ok){ const rows2 = await r2.json(); email = (rows2[0] && rows2[0].email) || ''; }
-  } catch(err) { /* fall through to manual copy */ }
-
-  const subject = 'Action needed: audit finding acknowledgment';
-  const body = `Hi ${staffName.split(',')[0]},\n\nPlease review and acknowledge an audit finding tied to your name. This link does not contain any patient information — just the audit type, date, and category.\n\n${link}\n\nThanks,\nRon`;
-
-  try { await navigator.clipboard.writeText(link); } catch(err) { /* clipboard may be blocked */ }
-
-  if(email){
-    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  } else {
-    prompt(`No email on file for ${staffName} — link copied to clipboard, text or email it manually:`, link);
-  }
+  alert('Online acknowledgment links are disconnected in local work-computer mode. Use Open Email, Mark Sent, Mark Received, and Print Form instead.');
 }
 
 // Shows the acknowledgment screen if the page was opened with ?ack=<id>.
@@ -947,93 +790,12 @@ async function checkAckLink(){
   const params = new URLSearchParams(window.location.search);
   const ackId = params.get('ack');
   if(!ackId) return;
-
   document.getElementById('ackScreen').style.display = 'block';
-  const content = document.getElementById('ackContent');
-
-  let row;
-  try {
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=*,audit_findings(audit_type,finding_date,unit,tags,audit_line_number)&id=eq.${encodeURIComponent(ackId)}`, {
-      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
-    });
-    if(!r.ok) throw new Error('HTTP ' + r.status);
-    const rows = await r.json();
-    row = rows[0];
-  } catch(err){
-    content.innerHTML = `<p>Sorry, this link couldn't be loaded. Ask your manager to resend it.</p>`;
-    return;
-  }
-  if(!row){
-    content.innerHTML = `<p>This link doesn't match a request on file. Ask your manager to resend it.</p>`;
-    return;
-  }
-
-  const f = row.audit_findings || {};
-  const typeLabel = AUDIT_TYPE_LABELS[f.audit_type] || f.audit_type || '—';
-
-  if(row.status === 'acknowledged'){
-    content.innerHTML = `
-      <h2 style="margin-top:0;">Already acknowledged</h2>
-      <p style="color:#9aa4b2;">You signed this on ${row.signed_at ? new Date(row.signed_at).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}) : '—'}. Nothing further needed.</p>
-    `;
-    return;
-  }
-
-  content.innerHTML = `
-    <h2 style="margin-top:0;">Audit Finding Acknowledgment</h2>
-    <p style="color:#9aa4b2;font-size:13px;">Hi ${row.staff_name.split(',')[0]} — please review and sign below. This does not include any patient information.</p>
-    <div style="background:#1a2028;border:1px solid #2a323c;border-radius:8px;padding:14px 16px;margin:16px 0;font-size:14px;">
-      <div><strong>Type:</strong> ${typeLabel}</div>
-      <div><strong>Date:</strong> ${f.finding_date || '—'}</div>
-      ${f.audit_line_number ? `<div><strong>Audit line #:</strong> ${escapeHtml(f.audit_line_number)}</div>` : ''}
-      ${f.unit ? `<div><strong>Unit:</strong> ${f.unit}</div>` : ''}
-      ${(f.tags && f.tags.length) ? `<div><strong>Category:</strong> ${f.tags.join(', ')}</div>` : ''}
-    </div>
-    <label style="display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#9aa4b2;margin-bottom:4px;">Comments (optional)</label>
-    <textarea id="ackComment" rows="3" placeholder="Add any context or response..." style="width:100%;box-sizing:border-box;background:#1a2028;border:1px solid #2a323c;border-radius:6px;padding:10px;color:#e6e9ee;font-family:inherit;font-size:13px;margin-bottom:14px;"></textarea>
-    <label style="display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#9aa4b2;margin-bottom:4px;">Type your full name to sign</label>
-    <input id="ackSignature" type="text" placeholder="Full name" style="width:100%;box-sizing:border-box;background:#1a2028;border:1px solid #2a323c;border-radius:6px;padding:10px;color:#e6e9ee;font-family:inherit;font-size:13px;margin-bottom:16px;">
-    <button onclick="submitAcknowledgment('${row.id}')" style="width:100%;padding:12px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">Sign &amp; Submit</button>
-  `;
+  document.getElementById('ackContent').innerHTML = `<h2 style="margin-top:0;">Acknowledgment links are disconnected</h2><p style="color:#9aa4b2;">This tracker is now local to the work computer. Please contact your manager for the variance form.</p>`;
 }
 
 async function submitAcknowledgment(ackId){
-  const signature = (document.getElementById('ackSignature').value || '').trim();
-  if(!signature){ alert('Please type your name to sign.'); return; }
-  const comment = (document.getElementById('ackComment').value || '').trim();
-
-  try {
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?id=eq.${encodeURIComponent(ackId)}`, {
-      method: 'PATCH',
-      headers: {
-        apikey: AUDIT_SB_CONFIG.key,
-        Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=representation'
-      },
-      body: JSON.stringify({ status: 'acknowledged', comment, signed_name: signature, signed_at: new Date().toISOString() })
-    });
-    if(!r.ok) throw new Error('HTTP ' + r.status);
-    const rows = await r.json();
-    const row = rows[0];
-
-    document.getElementById('ackContent').innerHTML = `
-      <h2 style="margin-top:0;">✅ Thank you</h2>
-      <p style="color:#9aa4b2;">Your acknowledgment has been recorded and sent to your manager.</p>
-    `;
-
-    // Best-effort: pop a pre-filled email to the manager. Depends on the
-    // employee's device having a mail app configured — not guaranteed, which
-    // is why the in-app "new acknowledgments" check in CC exists as a backup.
-    const f = row && row.finding_id ? row.finding_id : '';
-    setTimeout(() => {
-      const subject = `Audit acknowledgment signed — ${signature}`;
-      const body = `${signature} signed off on an audit finding.\n\nComment: ${comment || '(none)'}\n\n(Details in Command Center / the Audit tracker.)`;
-      window.location.href = `mailto:ronald.higley@arnothealth.org?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    }, 1200);
-  } catch(err){
-    alert('Could not submit — please try again. (' + err.message + ')');
-  }
+  alert('Online acknowledgments are disconnected in local work-computer mode.');
 }
 
 
@@ -1228,8 +990,6 @@ function renderTable(){
         ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">Mark Received</button>` : ''}
         ${(e.variance && ['sent','received'].includes(e.variance.status)) ? `<button onclick="resetVarianceStatus('${e.id}')" title="Correct the variance status back to not sent">Reset Status</button>` : ''}
         ${(e.variance && e.variance.status==='received') ? `<button onclick="printReturnedForm('${e.id}')" title="View and print this returned form">Print Form</button>` : ''}
-        <button onclick="sendToVarianceForm('${e.id}')" title="Open this finding pre-filled in CC's Performance Variance Report">📋 CC Form</button>
-        <button onclick="sendAcknowledgment('${e.id}')">📨 Ack</button>
         <button onclick="deleteEntry('${e.id}')">Delete</button>
       </td>
     </tr>
@@ -1445,10 +1205,9 @@ function buildStaffPickerHTML(entry){
       <div class="add-employee-row">
         <select id="staffDirSelect"><option value="">Choose from directory…</option>${options}</select>
         <button class="ghost small" type="button" onclick="addStaffFromDirectory()">Add</button>
-        <button class="ghost small" type="button" onclick="fetchCcDirectory()" title="Refresh staff list from CC">↻</button>
       </div>
       <div class="add-employee-row" style="margin-top:6px;">
-        <input type="text" id="staffCustomName" placeholder="Or type a custom name (agency/travelers not in CC)">
+        <input type="text" id="staffCustomName" placeholder="Type a staff name">
         <button class="ghost small" type="button" onclick="addStaffCustom()">Add</button>
       </div>
       <div class="checkbox-row" style="margin-top:10px;">
@@ -1637,7 +1396,7 @@ function deleteEntry(id){
   if(!confirm('Delete this entry?')) return;
   let entries = loadEntries().filter(e=>e.id!==id);
   saveEntries(entries);
-  deleteAuditFinding(id); // fire-and-forget — remove from CC's synced copy too
+  deleteAuditFinding(id);
   renderAll();
 }
 
@@ -1685,53 +1444,10 @@ async function saveEntry(){
     entries.push(data);
   }
   saveEntries(entries);
-  const savedEntry = entries.find(e=>e.id===(editingId||data.id));
   closeModal();
   renderAll();
-  if (savedEntry) {
-    const statusEl = document.getElementById('auditSyncStatus');
-    if(statusEl) statusEl.textContent = 'Saving shared copy...';
-    const synced = await pushAuditFinding(savedEntry);
-    if(synced){
-      if(statusEl) statusEl.textContent = 'Saved to shared audit list.';
-      await loadSharedAuditFindings();
-    } else {
-      if(statusEl) statusEl.textContent = 'Saved locally, but shared update failed.';
-      alert('Entry saved on this computer, but it did not update the shared audit list. Open Settings and use "Sync all entries to CC now" after checking the connection.');
-      if(lastAuditSyncError) console.warn('Audit shared sync failed:', lastAuditSyncError);
-    }
-  }
-}
-
-// ---------- send finding to CC's Performance Variance Report ----------
-// Opens Command Center in a new tab, pre-filled from this audit entry, so
-// the manager can review/complete it there and use CC's own
-// "Send Variance PDF to Staff" button. Adjust CC_APP_URL below if it moves.
-const CC_APP_URL = 'https://ronhigley7-sys.github.io/CC/';
-// Best-guess mapping from audit type -> CC variance-type checkbox id.
-// Edit this if a mapping is wrong; CC will just leave the box unchecked
-// for anything not listed here so you can pick it manually.
-const AUDIT_TO_VARIANCE_TYPE = {
-  pain: 'pain-reass',
-  behavioral: 'behavior',
-  sitter: 'behavior',
-  chart: 'documentation'
-};
-function sendToVarianceForm(id){
-  const e = loadEntries().find(x=>x.id===id);
-  if(!e) return;
-  const staffName = (e.staff && e.staff[0]) || '';
-  const params = new URLSearchParams({
-    varImport: '1',
-    type: AUDIT_TO_VARIANCE_TYPE[e.type] || '',
-    staff: staffName,
-    date: e.date || '',
-    auditLineNumber: e.auditLineNumber || '',
-    mrn: e.mrn || '',
-    issue: e.issue || '',
-    context: e.context || (AUDIT_TYPES[e.type]?.label || e.type)
-  });
-  window.open(`${CC_APP_URL}?${params.toString()}`, '_blank');
+  const statusEl = document.getElementById('auditSyncStatus');
+  if(statusEl) statusEl.textContent = 'Saved on this computer only.';
 }
 
 // ---------- variance email ----------
@@ -1773,7 +1489,6 @@ function markVarianceSent(id){
   entries[idx].variance.dateSent = dateSent.trim() || new Date().toISOString().slice(0,10);
   entries[idx].variance.dateReceived = '';
   saveEntries(entries);
-  pushAuditFinding(entries[idx]);
   renderAll();
 }
 
@@ -1784,7 +1499,6 @@ function resetVarianceStatus(id){
   if(idx<0) return;
   entries[idx].variance = { status:'not_sent', dateSent:'', dateReceived:'' };
   saveEntries(entries);
-  pushAuditFinding(entries[idx]);
   renderAll();
 }
 
@@ -1800,7 +1514,6 @@ function receiveVariance(id){
   entries[idx].variance.status = 'received';
   entries[idx].variance.dateReceived = dateReceived.trim() || new Date().toISOString().slice(0,10);
   saveEntries(entries);
-  pushAuditFinding(entries[idx]); // fire-and-forget sync to CC
   renderAll();
 }
 
@@ -1844,10 +1557,6 @@ function saveSettings(){
 seedIfMissing();
 applyRealChartData();
 renderAll();
-syncAllAuditFindings().then(()=>loadSharedAuditFindings()).then(loadAcknowledgmentReturns);
-setInterval(()=>{ loadSharedAuditFindings(); loadAcknowledgmentReturns(); }, SHARED_REFRESH_MS);
-fetchCcDirectory(); // pull the real staff roster from CC in the background
-checkAckLink(); // shows the acknowledgment screen instead, if ?ack=<id> is present
 </script>
 </body>
 </html>
