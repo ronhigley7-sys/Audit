@@ -248,6 +248,10 @@
           <button class="ghost small" onclick="addToDirectory()">Add</button>
         </div>
         <p class="hint">The staff picker pulls active names from the CC directory automatically. Add names here only for agency/travelers or staff not listed in CC.</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span id="ccDirectoryStatus" class="hint" style="margin:0;">Connecting to the CC staff directory…</span>
+          <button class="ghost small" type="button" onclick="fetchCcDirectory()">Refresh staff names</button>
+        </div>
       </div>
       <div class="field">
         <label>Variance form — CC recipients</label>
@@ -381,9 +385,13 @@ async function fetchCcDirectory(){
       if (!r.ok) throw new Error(`CC directory request failed (${r.status})`);
       const rows = await r.json();
       _ccDirectoryCache = [...new Set(rows.map(row => row.display_name).filter(Boolean))];
+      const status = document.getElementById('ccDirectoryStatus');
+      if (status) status.textContent = `${_ccDirectoryCache.length} staff names available from CC.`;
       showTemporaryStatus(`Loaded ${_ccDirectoryCache.length} staff names from CC.`);
     } catch(e) {
       if (_ccDirectoryCache === null) _ccDirectoryCache = [];
+      const status = document.getElementById('ccDirectoryStatus');
+      if (status) status.textContent = 'CC directory could not be reached. Use Refresh staff names or check the connection.';
       showTemporaryStatus('CC staff directory could not load; showing locally saved names.');
       console.warn('CC staff directory failed:', e);
     } finally {
@@ -1607,7 +1615,8 @@ function receiveVariance(id){
 }
 
 // ---------- settings ----------
-function openSettings(){
+async function openSettings(){
+  if (_ccDirectoryCache === null) await fetchCcDirectory();
   renderDirectoryChips();
   renderSmartsheetSourceButtons();
   document.getElementById('ccList').value = loadCC();
