@@ -380,7 +380,7 @@ async function fetchCcDirectory(){
   _ccDirectoryPromise = (async()=>{
     try {
       const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=display_name&order=display_name.asc`, {
-        headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+        headers: { apikey: AUDIT_SB_CONFIG.key }
       });
       if (!r.ok) throw new Error(`CC directory request failed (${r.status})`);
       const rows = await r.json();
@@ -421,7 +421,7 @@ function rebuildStaffDirSelect(){
 // This page sends/reads de-identified audit summary fields only.
 const AUDIT_SB_CONFIG = {
   url: 'https://xnsdvdfceflmagfhpycw.supabase.co',
-  key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIiLCJyZWYiOiJ4bnNkdmRmY2VmbG1hZ2ZocHljdyIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzc5NDE5NTY4LCJleHAiOjIwOTQ5OTU1Njh9.UzKZQj4BLxPpH_OCwQR8LyDUeP9YlKn5UtXRFUFaYKA'
+  key: 'sb_publishable_X3VPp9di5Ve-fw_uJJTUyQ_Ztzi6mds'
 };
 const SHARED_LOOKBACK_DAYS = 60;
 const SHARED_REFRESH_MS = 60000;
@@ -484,7 +484,6 @@ async function pushAuditFinding(entry){
       method: 'POST',
       headers: {
         apikey: AUDIT_SB_CONFIG.key,
-        Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
         'Content-Type': 'application/json',
         Prefer: 'resolution=merge-duplicates,return=minimal'
       },
@@ -502,7 +501,7 @@ async function deleteAuditFinding(id){
   try {
     await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?id=eq.${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+      headers: { apikey: AUDIT_SB_CONFIG.key }
     });
   } catch(e) { /* silent */ }
 }
@@ -587,7 +586,7 @@ async function loadSharedAuditFindings(){
   try {
     const cutoff = lookbackDate(SHARED_LOOKBACK_DAYS);
     const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast`, {
-      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+      headers: { apikey: AUDIT_SB_CONFIG.key }
     });
     if(!r.ok) return;
     const rows = await r.json();
