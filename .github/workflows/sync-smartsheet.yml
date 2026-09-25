@@ -1,6 +1,11 @@
 name: Sync Smartsheet Audit Findings
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/sync-audit-findings.js"
+      - ".github/workflows/sync-smartsheet.yml"
   workflow_dispatch:
   schedule:
     - cron: "*/30 * * * *"
