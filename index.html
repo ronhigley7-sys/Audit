@@ -165,10 +165,10 @@
   <div>
     <p class="eyebrow">3B / 3C · Unit Audits</p>
     <h1>Chart &amp; Unit Audit Non-Compliance Tracker</h1>
-    <p class="sub">Chart Audits, Sitter Audits, Behavioral Health Audits, and Pain Reassessment Audits from Smartsheet — logged manually.</p>
+    <p class="sub">Chart Audits, Sitter Audits, Behavioral Health Audits, and Pain Reassessment Audits from Smartsheet — auto-refreshed.</p>
   </div>
   <div class="header-actions">
-    <button class="ghost" onclick="refreshLocalAuditData()">Refresh</button>
+    <button class="ghost" onclick="refreshSharedAuditData()">Refresh</button>
     <button class="ghost" onclick="openSettings()">Settings</button>
     <button class="primary" onclick="openModal()">+ Add entry</button>
   </div>
@@ -211,7 +211,7 @@
     <div class="missing-grid" id="missingGrid"></div>
   </div>
 
-  <p class="foot-note">Local work-computer mode. Entries and any patient identifiers stay in this browser on this computer. This page does not sync audit rows or staff names to CC/Supabase.</p>
+  <p class="foot-note">Pulls staff names from the CC directory and audit summaries from the Smartsheet sync. Patient name, MR#, and full free-text PHI details stay on the work-computer PHI file unless entered locally.</p>
 </main>
 
 <!-- Entry modal -->
@@ -247,7 +247,7 @@
           <input type="text" id="newDirName" placeholder="Add a name to the directory">
           <button class="ghost small" onclick="addToDirectory()">Add</button>
         </div>
-        <p class="hint">Local-only staff list. Add names here, then use them in each audit entry. This page no longer pulls staff from CC.</p>
+        <p class="hint">The staff picker pulls active names from the CC directory automatically. Add names here only for agency/travelers or staff not listed in CC.</p>
       </div>
       <div class="field">
         <label>Variance form — CC recipients</label>
@@ -255,10 +255,11 @@
         <p class="hint">Comma-separated. Used to pre-fill "Send variance form" emails.</p>
       </div>
       <div class="field">
-        <label>Local work-computer mode</label>
-        <p class="hint" style="margin-bottom:8px;">CC/Supabase sync is disconnected. Use the local PHI Command Center file for protected patient/MRN details and this page only for the local browser copy you enter here.</p>
+        <label>Auto Smartsheet / CC sync</label>
+        <p class="hint" style="margin-bottom:8px;">Pulls de-identified audit summaries from the Smartsheet sync table and sends tagged staff/status updates back so CC employee tracking works. Patient name, MR#, visit number, and full issue descriptions are not sent to CC by this page.</p>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <span id="auditSyncStatus" class="hint" style="margin:0;">Nothing is sent to CC from this page.</span>
+          <button class="ghost small" onclick="syncAllAuditFindings()">Sync current entries to CC now</button>
+          <span id="auditSyncStatus" class="hint" style="margin:0;"></span>
         </div>
       </div>
       <div class="field">
@@ -270,10 +271,10 @@
         <label>Import latest Smartsheet export</label>
         <input type="file" id="auditImportFile" accept=".csv,text/csv">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
-          <button class="ghost small" onclick="importAuditCsv()">Import CSV to this computer</button>
+          <button class="ghost small" onclick="importAuditCsv()">Import CSV and update shared list</button>
           <span id="auditImportStatus" class="hint" style="margin:0;"></span>
         </div>
-        <p class="hint">Export the Smartsheet report as CSV, then import it here. Imported data stays in this browser on this work computer.</p>
+        <p class="hint">Use this only as a backup if the automatic Smartsheet sync has not run yet. The shared list stores date, audit type, unit, staff names, status, line number, and category/reason tags.</p>
       </div>
     </div>
     <div class="modal-foot">
@@ -367,30 +368,52 @@ function escapeHtml(value){
   })[ch]);
 }
 
-// ---------- Local staff directory ----------
-let _ccDirectoryCache = []; // retained for compatibility with older saved data
+// ---------- CC staff directory ----------
+let _ccDirectoryCache = null;
+let _ccDirectoryPromise = null;
 async function fetchCcDirectory(){
-  showTemporaryStatus('CC staff roster is disconnected. Add staff in Settings.');
+  if (_ccDirectoryPromise) return _ccDirectoryPromise;
+  _ccDirectoryPromise = (async()=>{
+    try {
+      const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=display_name&order=display_name.asc`, {
+        headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+      });
+      if (!r.ok) throw new Error(`CC directory request failed (${r.status})`);
+      const rows = await r.json();
+      _ccDirectoryCache = [...new Set(rows.map(row => row.display_name).filter(Boolean))];
+      showTemporaryStatus(`Loaded ${_ccDirectoryCache.length} staff names from CC.`);
+    } catch(e) {
+      if (_ccDirectoryCache === null) _ccDirectoryCache = [];
+      showTemporaryStatus('CC staff directory could not load; showing locally saved names.');
+      console.warn('CC staff directory failed:', e);
+    } finally {
+      _ccDirectoryPromise = null;
+      const sel = document.getElementById('staffDirSelect');
+      if (sel) rebuildStaffDirSelect();
+    }
+  })();
+  return _ccDirectoryPromise;
 }
 function combinedStaffDirectory(){
   const local = loadDirectory();
-  return Array.from(new Set(local)).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+  const cc = _ccDirectoryCache || [];
+  return Array.from(new Set([...cc, ...local])).filter(Boolean).sort((a,b)=>a.localeCompare(b));
 }
 function rebuildStaffDirSelect(){
   const sel = document.getElementById('staffDirSelect');
   if (!sel) return;
   const prev = sel.value;
-  const options = combinedStaffDirectory().map(n=>`<option value="${n}">${n}</option>`).join('');
+  const options = combinedStaffDirectory().map(n=>`<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
   sel.innerHTML = `<option value="">Choose from directory…</option>${options}`;
   sel.value = prev;
 }
 
-// ---------- Disconnected CC/Supabase compatibility helpers ----------
-// This hosted page is local-workstation only. These helpers are retained so
-// older buttons or saved data do not error, but they no longer send or fetch data.
+// ---------- Supabase sync (Command Center integration) ----------
+// Same Supabase project Command Center and its companion tools use.
+// This page sends/reads de-identified audit summary fields only.
 const AUDIT_SB_CONFIG = {
-  url: '',
-  key: ''
+  url: 'https://xnsdvdfceflmagfhpycw.supabase.co',
+  key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIiLCJyZWYiOiJ4bnNkdmRmY2VmbG1hZ2ZocHljdyIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzc5NDE5NTY4LCJleHAiOjIwOTQ5OTU1Njh9.UzKZQj4BLxPpH_OCwQR8LyDUeP9YlKn5UtXRFUFaYKA'
 };
 const SHARED_LOOKBACK_DAYS = 60;
 const SHARED_REFRESH_MS = 60000;
@@ -447,12 +470,33 @@ function auditFindingPayload(e){
 }
 
 async function pushAuditFinding(entry){
-  lastAuditSyncError = '';
-  return true;
+  try {
+    lastAuditSyncError = '';
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?on_conflict=id`, {
+      method: 'POST',
+      headers: {
+        apikey: AUDIT_SB_CONFIG.key,
+        Authorization: `Bearer ${AUDIT_SB_CONFIG.key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify(auditFindingPayload(entry))
+    });
+    if(!r.ok) lastAuditSyncError = await r.text();
+    return r.ok;
+  } catch(e) {
+    lastAuditSyncError = e.message || String(e);
+  }
+  return false;
 }
 
 async function deleteAuditFinding(id){
-  return true;
+  try {
+    await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?id=eq.${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+    });
+  } catch(e) { /* silent */ }
 }
 
 function asArray(value){
@@ -532,7 +576,17 @@ function mergeSharedEntries(localEntries, sharedEntries){
 }
 
 async function loadSharedAuditFindings(){
-  return;
+  try {
+    const cutoff = lookbackDate(SHARED_LOOKBACK_DAYS);
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key, Authorization: `Bearer ${AUDIT_SB_CONFIG.key}` }
+    });
+    if(!r.ok) return;
+    const rows = await r.json();
+    const sharedEntries = rows.map(entryFromAuditFinding).filter(is3B3CUnit);
+    saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
+    renderAll();
+  } catch(e) { /* local entries still work if shared table is unavailable */ }
 }
 
 // Employee sign-offs are the authoritative cross-computer return signal.
@@ -542,13 +596,15 @@ async function loadAcknowledgmentReturns(){
   return;
 }
 
-async function refreshLocalAuditData(){
+async function refreshSharedAuditData(){
   const button = Array.from(document.querySelectorAll('button')).find(btn => btn.textContent === 'Refresh');
   if(button) button.textContent = 'Refreshing...';
+  await loadSharedAuditFindings();
+  await fetchCcDirectory();
   renderAll();
   if(button) {
     button.textContent = 'Refresh';
-    showTemporaryStatus('Audit dashboard refreshed from this browser.');
+    showTemporaryStatus('Audit dashboard refreshed from CC/Smartsheet sync.');
   }
 }
 
@@ -576,8 +632,14 @@ function showTemporaryStatus(message){
 async function syncAllAuditFindings(){
   const statusEl = document.getElementById('auditSyncStatus');
   const entries = loadEntries();
-  if (statusEl) statusEl.textContent = `Local-only mode: ${entries.length} entries remain on this computer.`;
-  return entries.length;
+  if (statusEl) statusEl.textContent = `Syncing 0 / ${entries.length}...`;
+  let ok = 0;
+  for (let i = 0; i < entries.length; i++) {
+    if (await pushAuditFinding(entries[i])) ok++;
+    if (statusEl) statusEl.textContent = `Syncing ${i+1} / ${entries.length}...`;
+  }
+  if (statusEl) statusEl.textContent = `Synced ${ok} / ${entries.length} de-identified entries to CC.`;
+  return ok;
 }
 
 function parseCsv(text){
@@ -695,6 +757,7 @@ function collectImportTags(row){
   for(const header of row._headers || []){
     const key = normKey(header);
     if(skip.has(key)) continue;
+    if(key.includes('comment') || key.includes('note') || key.includes('detail') || key.includes('description')) continue;
     if(key.includes('reason') || key.includes('noncompliance') || key.includes('category') || key.includes('tag') || key.includes('missing')){
       splitImportList(row[key], true).forEach(value => tags.push(value));
     }
@@ -771,7 +834,16 @@ async function importAuditCsv(){
     imported.forEach(entry => byId.set(entry.id, {...(byId.get(entry.id) || {}), ...entry}));
     saveEntries(Array.from(byId.values()));
     renderAll();
-    if(statusEl) statusEl.textContent = `Imported ${imported.length} rows to this computer.`;
+
+    let synced = 0;
+    for(const entry of imported){
+      if(await pushAuditFinding(entry)) synced++;
+    }
+    await loadSharedAuditFindings();
+    if(statusEl) statusEl.textContent = `Imported ${imported.length}; updated ${synced} shared audit summaries.`;
+    if(synced < imported.length){
+      alert(`Imported ${imported.length} rows locally, but only ${synced} updated the shared audit list. Try Settings > Sync current entries to CC now after checking the connection.`);
+    }
   } catch(err){
     if(statusEl) statusEl.textContent = `Import failed: ${err.message}`;
     alert('CSV import failed: ' + err.message);
@@ -1197,7 +1269,7 @@ function renderAll(){
 // ---------- entry modal ----------
 function buildStaffPickerHTML(entry){
   modalStaff = (entry && entry.staff) ? [...entry.staff] : [];
-  const options = combinedStaffDirectory().map(n=>`<option value="${n}">${n}</option>`).join('');
+  const options = combinedStaffDirectory().map(n=>`<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
   return `
     <div class="field">
       <label>Staff involved</label>
@@ -1205,9 +1277,10 @@ function buildStaffPickerHTML(entry){
       <div class="add-employee-row">
         <select id="staffDirSelect"><option value="">Choose from directory…</option>${options}</select>
         <button class="ghost small" type="button" onclick="addStaffFromDirectory()">Add</button>
+        <button class="ghost small" type="button" onclick="fetchCcDirectory()" title="Refresh staff list from CC">Refresh</button>
       </div>
       <div class="add-employee-row" style="margin-top:6px;">
-        <input type="text" id="staffCustomName" placeholder="Type a staff name">
+        <input type="text" id="staffCustomName" placeholder="Or type a custom name">
         <button class="ghost small" type="button" onclick="addStaffCustom()">Add</button>
       </div>
       <div class="checkbox-row" style="margin-top:10px;">
@@ -1376,7 +1449,8 @@ function onTypeChange(t){
   document.getElementById('checklistWrap').innerHTML = buildChecklistHTML(t, entry);
 }
 
-function openModal(entry){
+async function openModal(entry){
+  if (_ccDirectoryCache === null) await fetchCcDirectory();
   editingId = entry ? entry.id : null;
   modalType = entry ? entry.type : 'chart';
   document.getElementById('modalTitle').textContent = entry ? 'Edit audit entry' : 'Add audit entry';
@@ -1444,10 +1518,22 @@ async function saveEntry(){
     entries.push(data);
   }
   saveEntries(entries);
+  const savedEntry = entries.find(e=>e.id===(editingId||data.id));
   closeModal();
   renderAll();
-  const statusEl = document.getElementById('auditSyncStatus');
-  if(statusEl) statusEl.textContent = 'Saved on this computer only.';
+  if (savedEntry) {
+    const statusEl = document.getElementById('auditSyncStatus');
+    if(statusEl) statusEl.textContent = 'Saving de-identified CC copy...';
+    const synced = await pushAuditFinding(savedEntry);
+    if(synced){
+      if(statusEl) statusEl.textContent = 'Saved and updated CC staff tracking.';
+      await loadSharedAuditFindings();
+    } else {
+      if(statusEl) statusEl.textContent = 'Saved locally, but CC update failed.';
+      alert('Entry saved on this computer, but it did not update the CC staff tracking table. Open Settings and use "Sync current entries to CC now" after checking the connection.');
+      if(lastAuditSyncError) console.warn('Audit shared sync failed:', lastAuditSyncError);
+    }
+  }
 }
 
 // ---------- variance email ----------
@@ -1489,6 +1575,7 @@ function markVarianceSent(id){
   entries[idx].variance.dateSent = dateSent.trim() || new Date().toISOString().slice(0,10);
   entries[idx].variance.dateReceived = '';
   saveEntries(entries);
+  pushAuditFinding(entries[idx]);
   renderAll();
 }
 
@@ -1499,6 +1586,7 @@ function resetVarianceStatus(id){
   if(idx<0) return;
   entries[idx].variance = { status:'not_sent', dateSent:'', dateReceived:'' };
   saveEntries(entries);
+  pushAuditFinding(entries[idx]);
   renderAll();
 }
 
@@ -1514,6 +1602,7 @@ function receiveVariance(id){
   entries[idx].variance.status = 'received';
   entries[idx].variance.dateReceived = dateReceived.trim() || new Date().toISOString().slice(0,10);
   saveEntries(entries);
+  pushAuditFinding(entries[idx]);
   renderAll();
 }
 
@@ -1557,6 +1646,10 @@ function saveSettings(){
 seedIfMissing();
 applyRealChartData();
 renderAll();
+syncAllAuditFindings().then(()=>loadSharedAuditFindings());
+setInterval(()=>{ loadSharedAuditFindings(); }, SHARED_REFRESH_MS);
+fetchCcDirectory();
+checkAckLink();
 </script>
 </body>
 </html>
