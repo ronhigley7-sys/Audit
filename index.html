@@ -268,7 +268,7 @@
       <div class="field">
         <label>Variance form — CC recipients</label>
         <input type="text" id="ccList" placeholder="name@arnothealth.org, name2@arnothealth.org">
-        <p class="hint">Comma-separated. Used to pre-fill "Send variance form" emails.</p>
+        <p class="hint">Comma-separated email addresses copied on variance messages. Staff selected on an audit are addressed directly from the CC directory; these recipients are used as a fallback when no staff email is available.</p>
       </div>
       <div class="field">
         <label>Auto Smartsheet / CC sync</label>
@@ -388,16 +388,24 @@ function escapeHtml(value){
 // ---------- CC staff directory ----------
 let _ccDirectoryCache = null;
 let _ccDirectoryPromise = null;
+let _ccDirectoryEmailByName = new Map();
 async function fetchCcDirectory(){
   if (_ccDirectoryPromise) return _ccDirectoryPromise;
   _ccDirectoryPromise = (async()=>{
     try {
-      const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=display_name&order=display_name.asc`, {
+      const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=display_name,email&order=display_name.asc`, {
         headers: { apikey: AUDIT_SB_CONFIG.key }
       });
       if (!r.ok) throw new Error(`CC directory request failed (${r.status})`);
       const rows = await r.json();
       _ccDirectoryCache = [...new Set(rows.map(row => row.display_name).filter(Boolean))];
+      _ccDirectoryEmailByName = new Map();
+      rows.forEach(row=>{
+        const name = String(row.display_name || '').trim();
+        const email = String(row.email || '').trim();
+        const key = name.toLocaleLowerCase();
+        if(name && email && !_ccDirectoryEmailByName.has(key)) _ccDirectoryEmailByName.set(key, email);
+      });
       const status = document.getElementById('ccDirectoryStatus');
       if (status) status.textContent = `${_ccDirectoryCache.length} staff names available from CC.`;
       showTemporaryStatus(`Loaded ${_ccDirectoryCache.length} staff names from CC.`);
@@ -1586,12 +1594,29 @@ async function saveEntry(){
 }
 
 // ---------- variance email ----------
-function sendVariance(id){
+function emailRecipients(value){
+  const values = Array.isArray(value) ? value : [value];
+  return [...new Set(values.flatMap(item=>String(item || '').split(/[;,]+/))
+    .map(email=>email.trim())
+    .filter(email=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))];
+}
+
+async function sendVariance(id){
   const e = loadEntries().find(x=>x.id===id);
   if(!e) return;
-  const cc = (e.suggestedCC && e.suggestedCC.length) ? e.suggestedCC.join(', ') : loadCC();
-  if(!cc){
-    alert('Add your variance form CC list in Settings first (or this entry has no "Send to" data from Smartsheet).');
+  if(_ccDirectoryCache === null) await fetchCcDirectory();
+  const staffEmails = (e.staff || [])
+    .map(name=>_ccDirectoryEmailByName.get(String(name || '').trim().toLocaleLowerCase()))
+    .filter(Boolean);
+  const suggestedEmails = emailRecipients(e.suggestedCC);
+  const configuredEmails = emailRecipients(loadCC());
+  const toEmails = staffEmails.length ? staffEmails : (suggestedEmails.length ? suggestedEmails : configuredEmails);
+  const toSet = new Set(toEmails.map(email=>email.toLocaleLowerCase()));
+  const ccEmails = staffEmails.length
+    ? [...new Set([...suggestedEmails, ...configuredEmails].filter(email=>!toSet.has(email.toLocaleLowerCase())))]
+    : [];
+  if(!toEmails.length){
+    alert('This audit has no email recipient. Add a staff member from the CC directory to the audit, or add an email address in Settings.');
     return;
   }
   const subject = `Variance Form Needed — ${AUDIT_TYPES[e.type]?.label || e.type}${e.patient ? ' — ' + e.patient : ''}${e.mrn ? ' (MR# ' + e.mrn + ')' : ''}`;
@@ -1608,7 +1633,8 @@ function sendVariance(id){
     'Please complete a variance form for this non-compliance finding.'
   ].filter(Boolean).join('\n');
 
-  const mailto = `mailto:${encodeURIComponent(cc)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines)}`;
+  const ccParameter = ccEmails.length ? `&cc=${encodeURIComponent(ccEmails.join(','))}` : '';
+  const mailto = `mailto:${encodeURIComponent(toEmails.join(','))}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines)}${ccParameter}`;
   window.location.href = mailto;
 }
 
