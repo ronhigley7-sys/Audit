@@ -8,6 +8,12 @@ const SOURCE_SEARCHES = [
   { type: 'sitter', terms: ['Sitter Audit', 'Sitter Audits'] },
   { type: 'behavioral', terms: ['Behavioral Health Audit', 'Behavioral Health Audits', 'Suicide Audit', 'C-SSRS Audit'] }
 ];
+const DEFAULT_SOURCES = [
+  { type: 'chart', objectType: 'sheet', objectId: '1183027658286980', name: 'NPI Chart Audits' },
+  { type: 'pain', objectType: 'sheet', objectId: '5168667303038852', name: 'Pain Reassessment Audits' },
+  { type: 'sitter', objectType: 'sheet', objectId: '8912264442630020', name: 'Inpatient Sitter Audits' },
+  { type: 'behavioral', objectType: 'sheet', objectId: '6660464628944772', name: 'Inpatient Behavior Health Audits' }
+];
 
 if (!SMARTSHEET_TOKEN) {
   throw new Error('Missing SMARTSHEET_TOKEN. Add it as a GitHub Actions secret for the Audit repo.');
@@ -70,6 +76,7 @@ function collectTags(row) {
   ]);
   for (const [key, value] of Object.entries(row)) {
     if (skip.has(key)) continue;
+    if (key.includes('comment') || key.includes('note') || key.includes('detail') || key.includes('description')) continue;
     if (key.includes('reason') || key.includes('noncompliance') || key.includes('category') || key.includes('tag') || key.includes('missing')) {
       splitList(value, true).forEach(tag => tags.push(tag));
     }
@@ -128,7 +135,7 @@ function collectReasons(row, type) {
   const explicit = pick(row, [
     'Why Missed', 'Reason Missed', 'Reason for Missed Reassessment', 'Reason for Non-Compliance',
     'Reason for Noncompliance', 'Non-Compliance Reason', 'Noncompliance Reason',
-    'Variance Reason', 'Specific Variance', 'Audit Finding', 'Finding'
+    'Variance Reason', 'Specific Variance'
   ]);
   splitList(explicit, true).forEach(reason => reasons.push(reason));
   return [...new Set(reasons.map(value => String(value || '').trim()).filter(Boolean))];
@@ -184,7 +191,7 @@ function rowToObject(sourceData, row) {
   return out;
 }
 
-function findingFromRow(row, fallbackType, sourceName, rowId) {
+function findingFromRow(row, fallbackType, sourceName, rowId, rowNumber) {
   const date = normalizeDate(pick(row, ['Audit Date', 'Date', 'Observation Date', 'Entry Date', 'Created Date']));
   if (!date) return null;
   const type = normalizeType(pick(row, ['Audit Type', 'Type', 'Audit', 'Form', 'Category']) || sourceName, fallbackType);
@@ -193,6 +200,7 @@ function findingFromRow(row, fallbackType, sourceName, rowId) {
   const tags = collectReasons(row, type);
   const staff = collectStaff(row);
   const status = pick(row, ['Status', 'Follow Up Status']).toLowerCase() === 'closed' ? 'closed' : 'open';
+  const auditLineNumber = pick(row, ['Audit Line Number', 'Audit Line #', 'Line Number', 'Line #', 'Audit Line', 'Audit #', 'Record Number']) || (rowNumber ? String(rowNumber) : '');
   return {
     id: `ss_${type}_${rowId}`,
     audit_type: type,
@@ -201,7 +209,8 @@ function findingFromRow(row, fallbackType, sourceName, rowId) {
     unit: inferUnit(unitText || context) || null,
     staff_names: staff,
     tags,
-    variance_status: null
+    variance_status: null,
+    audit_line_number: auditLineNumber || null
   };
 }
 
@@ -213,6 +222,8 @@ async function resolveSources() {
       return { type: type || 'chart', objectType: objectType || 'sheet', objectId: id, name: nameParts.join(':') || item };
     });
   }
+
+  if (DEFAULT_SOURCES.length) return DEFAULT_SOURCES;
 
   const sources = [];
   const seen = new Set();
@@ -261,10 +272,16 @@ async function main() {
 
   const findings = [];
   for (const source of sources) {
-    const data = await fetchSource(source);
+    let data;
+    try {
+      data = await fetchSource(source);
+    } catch (error) {
+      console.warn(`Skipping ${source.name || source.objectId}: ${error.message}`);
+      continue;
+    }
     if (!data) continue;
     for (const row of data.rows || []) {
-      const mapped = findingFromRow(rowToObject(data, row), source.type, data.name || source.name || '', row.id);
+      const mapped = findingFromRow(rowToObject(data, row), source.type, data.name || source.name || '', row.id, row.rowNumber);
       if (mapped) findings.push(mapped);
     }
   }
