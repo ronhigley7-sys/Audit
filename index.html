@@ -457,26 +457,21 @@ function deriveAuditTags(type, items){
 }
 
 function inferUnitFromText(text){
-  const raw = String(text || '').trim();
-  if(!raw) return '';
-  const compact = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if(compact.includes('3B3C') || compact.includes('3BC')) return '3BC';
-  if(compact.includes('3B')) return '3B';
-  if(compact.includes('3C')) return '3C';
-  const match = raw.match(/\b(4A|4B|5D|OBS|MS OBS|MED\/SURG|MED SURG)\b/i);
-  return match ? match[1].toUpperCase() : '';
+  const tokens = String(text || '').toUpperCase().match(/[A-Z0-9]+/g) || [];
+  const has3B = tokens.includes('3B');
+  const has3C = tokens.includes('3C');
+  if(tokens.includes('3BC') || (has3B && has3C)) return '3B/3C';
+  if(has3B) return '3B';
+  if(has3C) return '3C';
+  return '';
 }
 
 function is3B3CUnit(entry){
-  const raw = [
-    entry && entry.unit,
-    entry && entry.context
-  ].filter(Boolean).join(' ');
-  const compact = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if(!compact) return true;
-  if(compact.includes('3B3C') || compact.includes('3BC') || compact.includes('3B') || compact.includes('3C')) return true;
-  if(compact.includes('STROKETELE') || compact.includes('TELESTROKE')) return true;
-  if(/\b(4A|4B|5D|ICU|ED|ER|PACU|OR)\b/i.test(raw)) return false;
+  const unit = String(entry && entry.unit || '').trim();
+  if(unit) return Boolean(inferUnitFromText(unit));
+  // Shared Smartsheet rows need an explicit 3B/3C unit. Local records belong
+  // to this unit-specific tracker and may not store the unit separately.
+  if(String(entry && entry.id || '').startsWith('ss_')) return false;
   return true;
 }
 
@@ -518,6 +513,7 @@ function auditFindingPayload(e){
 }
 
 async function pushAuditFinding(entry){
+  if(!is3B3CUnit(entry)) return false;
   try {
     lastAuditSyncError = '';
     const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?on_conflict=id`, {
@@ -678,14 +674,14 @@ function showTemporaryStatus(message){
 
 async function syncAllAuditFindings(){
   const statusEl = document.getElementById('auditSyncStatus');
-  const entries = loadEntries();
+  const entries = visibleEntries();
   if (statusEl) statusEl.textContent = `Syncing 0 / ${entries.length}...`;
   let ok = 0;
   for (let i = 0; i < entries.length; i++) {
     if (await pushAuditFinding(entries[i])) ok++;
     if (statusEl) statusEl.textContent = `Syncing ${i+1} / ${entries.length}...`;
   }
-  if (statusEl) statusEl.textContent = `Synced ${ok} / ${entries.length} de-identified entries to CC.`;
+  if (statusEl) statusEl.textContent = `Synced ${ok} / ${entries.length} 3B/3C entries to CC.`;
   return ok;
 }
 
