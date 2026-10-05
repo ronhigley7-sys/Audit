@@ -157,8 +157,7 @@
 </head>
 <body>
 
-<!-- Compatibility container for old acknowledgment links. Online acknowledgments
-     are disabled in local work-computer mode. -->
+<!-- Staff variance response links opened from email use this screen. -->
 <div id="ackScreen" style="display:none;position:fixed;inset:0;background:#0b0f14;z-index:5000;overflow-y:auto;">
   <div style="max-width:520px;margin:40px auto;background:#12181f;border:1px solid #2a323c;border-radius:12px;padding:28px;font-family:var(--sans, Arial, sans-serif);color:#e6e9ee;">
     <div id="ackContent">Loading…</div>
@@ -896,8 +895,57 @@ async function importAuditCsv(){
 // ---------- employee acknowledgment / sign-off ----------
 const AUDIT_TYPE_LABELS = { chart:'Chart Audit', sitter:'Sitter Audit', behavioral:'Behavioral Health Audit', pain:'Pain Reassessment Audit' };
 
+function auditBaseUrl(){
+  if(/^https?:$/i.test(window.location.protocol)){
+    return window.location.origin + window.location.pathname.replace(/[^\\/]*$/, '');
+  }
+  return 'https://ronhigley7-sys.github.io/Audit/';
+}
+
+function acknowledgmentUrl(id){
+  return auditBaseUrl() + '?ack=' + encodeURIComponent(id || '');
+}
+
+async function fetchAcknowledgmentEntry(ackId){
+  const local = loadEntries().find(entry => entry.id === ackId);
+  if(local) return local;
+  try {
+    const url = `${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&id=eq.${encodeURIComponent(ackId)}&limit=1`;
+    const response = await fetch(url, { headers: { apikey: AUDIT_SB_CONFIG.key } });
+    if(!response.ok) return null;
+    const rows = await response.json();
+    return rows && rows.length ? entryFromAuditFinding(rows[0]) : null;
+  } catch(error) {
+    return null;
+  }
+}
+
+function acknowledgmentDetailsHtml(entry){
+  return [
+    ['Audit type', AUDIT_TYPES[entry.type]?.label || entry.type],
+    ['Date', fmtDate(entry.date)],
+    ['Audit line #', entry.auditLineNumber || ''],
+    ['Unit', entry.unit || ''],
+    ['Staff involved', (entry.staff || []).join(', ')],
+    ['Issue', summarize(entry)]
+  ].filter(([, value]) => String(value || '').trim()).map(([label, value]) => (
+    '<div style="border-top:1px solid #2e3947;padding:10px 0;">' +
+      '<b style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">' + escapeHtml(label) + '</b>' +
+      '<span style="white-space:pre-wrap;">' + escapeHtml(value) + '</span>' +
+    '</div>'
+  )).join('');
+}
+
 async function sendAcknowledgment(id){
-  alert('Online acknowledgment links are disconnected in local work-computer mode. Use Open Email, Mark Sent, Mark Received, and Print Form instead.');
+  const url = acknowledgmentUrl(id);
+  try {
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(url);
+      alert('Variance response link copied. Paste it into the staff email if needed.');
+      return;
+    }
+  } catch(error) { /* fall through to prompt */ }
+  prompt('Copy this variance response link:', url);
 }
 
 // Shows the acknowledgment screen if the page was opened with ?ack=<id>.
@@ -905,12 +953,59 @@ async function checkAckLink(){
   const params = new URLSearchParams(window.location.search);
   const ackId = params.get('ack');
   if(!ackId) return;
-  document.getElementById('ackScreen').style.display = 'block';
-  document.getElementById('ackContent').innerHTML = `<h2 style="margin-top:0;">Acknowledgment links are disconnected</h2><p style="color:#9aa4b2;">This tracker is now local to the work computer. Please contact your manager for the variance form.</p>`;
+  const screen = document.getElementById('ackScreen');
+  const content = document.getElementById('ackContent');
+  screen.style.display = 'block';
+  content.innerHTML = '<h2 style="margin-top:0;">Loading variance follow-up...</h2>';
+  const entry = await fetchAcknowledgmentEntry(ackId);
+  if(!entry){
+    content.innerHTML = '<h2 style="margin-top:0;">Variance link not found</h2><p style="color:#9aa4b2;">Ask leadership to resend the variance email or check the audit line number.</p>';
+    return;
+  }
+  const alreadyReturned = entry.variance && entry.variance.status === 'received';
+  content.innerHTML = `
+    <h2 style="margin-top:0;">Variance Follow-up</h2>
+    <p style="color:#9aa4b2;">Review the audit summary below. After your variance form is complete, mark it returned so leadership can close the follow-up.</p>
+    <div style="margin:16px 0 20px;">${acknowledgmentDetailsHtml(entry)}</div>
+    <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Your name</label>
+    <input id="ackStaffName" type="text" value="${escapeHtml((entry.staff || [])[0] || '')}" style="width:100%;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;">
+    <button id="ackSubmitButton" onclick="submitAcknowledgment('${escapeHtml(ackId)}')" style="background:#e8b840;color:#241d09;border:none;font-weight:700;padding:10px 16px;border-radius:7px;cursor:pointer;">${alreadyReturned ? 'Already returned - update again' : 'Mark variance form returned'}</button>
+    <p id="ackSubmitStatus" style="color:#8fa0b3;font-size:12px;margin-top:12px;"></p>
+  `;
 }
 
 async function submitAcknowledgment(ackId){
-  alert('Online acknowledgments are disconnected in local work-computer mode.');
+  const status = document.getElementById('ackSubmitStatus');
+  const button = document.getElementById('ackSubmitButton');
+  if(status) status.textContent = 'Updating variance return status...';
+  if(button) button.disabled = true;
+  try {
+    const response = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?id=eq.${encodeURIComponent(ackId)}`, {
+      method: 'PATCH',
+      headers: {
+        apikey: AUDIT_SB_CONFIG.key,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal'
+      },
+      body: JSON.stringify({ variance_status: 'received' })
+    });
+    if(!response.ok) throw new Error(await response.text());
+    const entries = loadEntries();
+    const idx = entries.findIndex(entry => entry.id === ackId);
+    if(idx >= 0){
+      entries[idx].variance = entries[idx].variance || {};
+      entries[idx].variance.status = 'received';
+      entries[idx].variance.dateReceived = new Date().toISOString().slice(0,10);
+      entries[idx].variance.receivedAutomatically = true;
+      saveEntries(entries);
+    }
+    if(status) status.textContent = 'Thank you. The variance was marked returned.';
+    if(button) button.textContent = 'Returned';
+    await loadSharedAuditFindings();
+  } catch(error) {
+    if(status) status.textContent = 'Could not update the return status. Please notify leadership that the variance form was completed.';
+    if(button) button.disabled = false;
+  }
 }
 
 
@@ -1109,7 +1204,7 @@ function renderTable(){
       <td data-label="Variance">${varianceLabel(e.variance)}</td>
       <td data-label="Actions" class="row-actions actions-cell">
         <button onclick="editEntry('${e.id}')">Edit</button>
-        <button onclick="sendVariance('${e.id}')" title="Open the variance email without changing its status">Open Email</button>
+        <button onclick="sendVariance('${e.id}')" title="Open the variance email with a response link. Use Mark Sent after sending.">Open Email</button>
         <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the source Smartsheet and copy row lookup details">Smartsheet</button>
         ${(!e.variance || e.variance.status==='not_sent') ? `<button onclick="markVarianceSent('${e.id}')" title="Confirm the variance was actually sent">Mark Sent</button>` : ''}
         ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">Mark Received</button>` : ''}
@@ -1616,6 +1711,7 @@ async function sendVariance(id){
     return;
   }
   const subject = `Variance Form Needed — ${AUDIT_TYPES[e.type]?.label || e.type}${e.patient ? ' — ' + e.patient : ''}${e.mrn ? ' (MR# ' + e.mrn + ')' : ''}`;
+  const responseLink = acknowledgmentUrl(e.id);
   const bodyLines = [
     `Audit type: ${AUDIT_TYPES[e.type]?.label || e.type}`,
     `Date: ${fmtDate(e.date)}`,
@@ -1626,7 +1722,10 @@ async function sendVariance(id){
     e.staff && e.staff.length ? `Staff involved: ${e.staff.join(', ')}` : null,
     `Issue: ${e.issue || 'See attached audit notification.'}`,
     '',
-    'Please complete a variance form for this non-compliance finding.'
+    'Please complete a variance form for this non-compliance finding.',
+    '',
+    'Open variance response link:',
+    responseLink
   ].filter(Boolean).join('\n');
 
   const ccParameter = ccEmails.length ? `&cc=${encodeURIComponent(ccEmails.join(','))}` : '';
