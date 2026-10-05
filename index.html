@@ -627,6 +627,7 @@ async function loadSharedAuditFindings(){
     const rows = await r.json();
     const sharedEntries = rows.map(entryFromAuditFinding).filter(is3B3CUnit);
     saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
+    await loadAcknowledgmentReturns(false);
     renderAll();
   } catch(e) { /* local entries still work if shared table is unavailable */ }
 }
@@ -634,8 +635,43 @@ async function loadSharedAuditFindings(){
 // Employee sign-offs are the authoritative cross-computer return signal.
 // A signed acknowledgment automatically changes the matching variance to
 // Received and supplies the employee response/signature for viewing/printing.
-async function loadAcknowledgmentReturns(){
-  return;
+async function loadAcknowledgmentReturns(renderAfter){
+  try {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - SHARED_LOOKBACK_DAYS);
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=id,finding_id,staff_name,status,comment,signed_name,signed_at,requested_at&status=eq.acknowledged&signed_at=gte.${encodeURIComponent(cutoff.toISOString())}&order=signed_at.desc.nullslast`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key }
+    });
+    if(!r.ok) return;
+    const rows = await r.json();
+    acknowledgmentByFinding = new Map();
+    rows.forEach(row => {
+      if(row.finding_id && !acknowledgmentByFinding.has(row.finding_id)) acknowledgmentByFinding.set(row.finding_id, row);
+    });
+
+    const entries = loadEntries();
+    let changed = false;
+    entries.forEach(entry => {
+      const ack = acknowledgmentByFinding.get(entry.id);
+      if(!ack) return;
+      entry.variance = entry.variance || {};
+      if(entry.variance.status !== 'received') {
+        entry.variance.status = 'received';
+        changed = true;
+      }
+      const receivedDate = ack.signed_at ? String(ack.signed_at).slice(0,10) : new Date().toISOString().slice(0,10);
+      if(entry.variance.dateReceived !== receivedDate) {
+        entry.variance.dateReceived = receivedDate;
+        changed = true;
+      }
+      if(!entry.variance.receivedAutomatically) {
+        entry.variance.receivedAutomatically = true;
+        changed = true;
+      }
+    });
+    if(changed) saveEntries(entries);
+    if(renderAfter !== false) renderAll();
+  } catch(e) { /* returned forms still show without the response details */ }
 }
 
 async function refreshSharedAuditData(){
@@ -948,6 +984,26 @@ async function sendAcknowledgment(id){
   prompt('Copy this variance response link:', url);
 }
 
+async function createAcknowledgmentRequests(entry){
+  const staffNames = entry && entry.staff && entry.staff.length ? entry.staff : [''];
+  try {
+    await Promise.all(staffNames.map(staffName => fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
+      method: 'POST',
+      headers: {
+        apikey: AUDIT_SB_CONFIG.key,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal'
+      },
+      body: JSON.stringify({
+        finding_id: entry.id,
+        staff_name: staffName || 'Unspecified employee',
+        status: 'pending',
+        requested_by: '3B/3C Audit Dashboard'
+      })
+    })));
+  } catch(error) { /* email still opens even if request tracking fails */ }
+}
+
 // Shows the acknowledgment screen if the page was opened with ?ack=<id>.
 async function checkAckLink(){
   const params = new URLSearchParams(window.location.search);
@@ -962,14 +1018,27 @@ async function checkAckLink(){
     content.innerHTML = '<h2 style="margin-top:0;">Variance link not found</h2><p style="color:#9aa4b2;">Ask leadership to resend the variance email or check the audit line number.</p>';
     return;
   }
+  const existingAck = acknowledgmentByFinding.get(ackId) || {};
   const alreadyReturned = entry.variance && entry.variance.status === 'received';
+  const defaultName = existingAck.signed_name || existingAck.staff_name || (entry.staff || [])[0] || '';
+  const defaultComment = existingAck.comment || '';
   content.innerHTML = `
     <h2 style="margin-top:0;">Variance Follow-up</h2>
-    <p style="color:#9aa4b2;">Review the audit summary below. After your variance form is complete, mark it returned so leadership can close the follow-up.</p>
+    <p style="color:#9aa4b2;">Review the audit summary below. Complete the response, sign it, and submit it back to leadership.</p>
     <div style="margin:16px 0 20px;">${acknowledgmentDetailsHtml(entry)}</div>
-    <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Your name</label>
-    <input id="ackStaffName" type="text" value="${escapeHtml((entry.staff || [])[0] || '')}" style="width:100%;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;">
-    <button id="ackSubmitButton" onclick="submitAcknowledgment('${escapeHtml(ackId)}')" style="background:#e8b840;color:#241d09;border:none;font-weight:700;padding:10px 16px;border-radius:7px;cursor:pointer;">${alreadyReturned ? 'Already returned - update again' : 'Mark variance form returned'}</button>
+
+    <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Your response / explanation</label>
+    <textarea id="ackComment" placeholder="Explain what happened, barriers, corrective action, or your response to the finding." style="width:100%;min-height:130px;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;font:15px Arial,sans-serif;">${escapeHtml(defaultComment)}</textarea>
+
+    <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Typed signature</label>
+    <input id="ackSignedName" type="text" value="${escapeHtml(defaultName)}" placeholder="Type your full name" style="width:100%;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;">
+
+    <label style="display:flex;gap:8px;align-items:flex-start;color:#cbd5e1;font-size:13px;line-height:1.35;margin-bottom:16px;">
+      <input id="ackConfirm" type="checkbox" style="margin-top:2px;">
+      <span>I understand this audit finding and I am submitting my signed response/variance form to leadership.</span>
+    </label>
+
+    <button id="ackSubmitButton" onclick="submitAcknowledgment('${escapeHtml(ackId)}')" style="background:#e8b840;color:#241d09;border:none;font-weight:700;padding:10px 16px;border-radius:7px;cursor:pointer;">${alreadyReturned ? 'Update signed response' : 'Submit signed variance response'}</button>
     <p id="ackSubmitStatus" style="color:#8fa0b3;font-size:12px;margin-top:12px;"></p>
   `;
 }
@@ -977,9 +1046,43 @@ async function checkAckLink(){
 async function submitAcknowledgment(ackId){
   const status = document.getElementById('ackSubmitStatus');
   const button = document.getElementById('ackSubmitButton');
-  if(status) status.textContent = 'Updating variance return status...';
+  const comment = String(document.getElementById('ackComment')?.value || '').trim();
+  const signedName = String(document.getElementById('ackSignedName')?.value || '').trim();
+  const confirmed = document.getElementById('ackConfirm')?.checked;
+  if(!comment){
+    if(status) status.textContent = 'Please enter your response or explanation before submitting.';
+    return;
+  }
+  if(!signedName){
+    if(status) status.textContent = 'Please type your name as your signature.';
+    return;
+  }
+  if(!confirmed){
+    if(status) status.textContent = 'Please check the confirmation box before submitting.';
+    return;
+  }
+  if(status) status.textContent = 'Submitting signed variance response...';
   if(button) button.disabled = true;
   try {
+    const signedAt = new Date().toISOString();
+    const ackResponse = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
+      method: 'POST',
+      headers: {
+        apikey: AUDIT_SB_CONFIG.key,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal'
+      },
+      body: JSON.stringify({
+        finding_id: ackId,
+        staff_name: signedName,
+        status: 'acknowledged',
+        comment,
+        signed_name: signedName,
+        signed_at: signedAt
+      })
+    });
+    if(!ackResponse.ok) throw new Error(await ackResponse.text());
+
     const response = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?id=eq.${encodeURIComponent(ackId)}`, {
       method: 'PATCH',
       headers: {
@@ -990,20 +1093,29 @@ async function submitAcknowledgment(ackId){
       body: JSON.stringify({ variance_status: 'received' })
     });
     if(!response.ok) throw new Error(await response.text());
+
     const entries = loadEntries();
     const idx = entries.findIndex(entry => entry.id === ackId);
     if(idx >= 0){
       entries[idx].variance = entries[idx].variance || {};
       entries[idx].variance.status = 'received';
-      entries[idx].variance.dateReceived = new Date().toISOString().slice(0,10);
+      entries[idx].variance.dateReceived = signedAt.slice(0,10);
       entries[idx].variance.receivedAutomatically = true;
       saveEntries(entries);
     }
-    if(status) status.textContent = 'Thank you. The variance was marked returned.';
-    if(button) button.textContent = 'Returned';
+    acknowledgmentByFinding.set(ackId, {
+      finding_id: ackId,
+      staff_name: signedName,
+      status: 'acknowledged',
+      comment,
+      signed_name: signedName,
+      signed_at: signedAt
+    });
+    if(status) status.textContent = 'Thank you. Your signed variance response was submitted.';
+    if(button) button.textContent = 'Submitted';
     await loadSharedAuditFindings();
   } catch(error) {
-    if(status) status.textContent = 'Could not update the return status. Please notify leadership that the variance form was completed.';
+    if(status) status.textContent = 'Could not submit the response. Please notify leadership that the variance form was completed.';
     if(button) button.disabled = false;
   }
 }
@@ -1722,7 +1834,7 @@ async function sendVariance(id){
     e.staff && e.staff.length ? `Staff involved: ${e.staff.join(', ')}` : null,
     `Issue: ${e.issue || 'See attached audit notification.'}`,
     '',
-    'Please complete a variance form for this non-compliance finding.',
+    'Please complete the variance response/signature link below for this non-compliance finding.',
     '',
     'Open variance response link:',
     responseLink
@@ -1730,6 +1842,7 @@ async function sendVariance(id){
 
   const ccParameter = ccEmails.length ? `&cc=${encodeURIComponent(ccEmails.join(','))}` : '';
   const mailto = `mailto:${encodeURIComponent(toEmails.join(','))}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines)}${ccParameter}`;
+  createAcknowledgmentRequests(e);
   window.location.href = mailto;
 }
 
