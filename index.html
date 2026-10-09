@@ -368,6 +368,9 @@ let editingId = null;
 let modalType = 'chart';
 let modalStaff = [];
 let acknowledgmentByFinding = new Map();
+let signatureByFinding = new Map();
+let _ackSignatureHasData = false;
+let _ackSignatureDrawing = false;
 let auditLineSearch = '';
 let selectedAuditMonth = '';
 
@@ -757,6 +760,7 @@ async function loadAcknowledgmentReturns(renderAfter){
     });
     if(!r.ok) return;
     const rows = await r.json();
+    signatureByFinding = await loadSignatureReturns();
     acknowledgmentByFinding = new Map();
     rows.forEach(row => {
       if(row.finding_id && !acknowledgmentByFinding.has(row.finding_id)) acknowledgmentByFinding.set(row.finding_id, row);
@@ -1117,6 +1121,137 @@ async function createAcknowledgmentRequests(entry){
   } catch(error) { /* email still opens even if request tracking fails */ }
 }
 
+
+function parseAuditSignaturePayload(value){
+  if(!value) return null;
+  let parsed = value;
+  if(typeof parsed === 'string'){
+    try { parsed = JSON.parse(parsed); } catch(error) { return null; }
+  }
+  if(parsed && typeof parsed.value === 'string'){
+    try { parsed = JSON.parse(parsed.value); } catch(error) { return null; }
+  }
+  if(!parsed || typeof parsed !== 'object') return null;
+  const dataUrl = String(parsed.signature_data_url || '');
+  if(!dataUrl.startsWith('data:image/png;base64,')) return null;
+  return {
+    finding_id: String(parsed.finding_id || ''),
+    staff_name: String(parsed.staff_name || ''),
+    signed_name: String(parsed.signed_name || parsed.staff_name || ''),
+    signed_at: String(parsed.signed_at || ''),
+    signature_data_url: dataUrl
+  };
+}
+
+async function loadSignatureReturns(){
+  const signatures = new Map();
+  try {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/tracker_state?key=like.audit_signature_*&select=key,value`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key }
+    });
+    if(!r.ok) return signatures;
+    const rows = await r.json();
+    rows.forEach(row=>{
+      const payload = parseAuditSignaturePayload(row.value);
+      const id = payload && (payload.finding_id || String(row.key || '').replace(/^audit_signature_/, ''));
+      if(id && payload) signatures.set(id, payload);
+    });
+  } catch(error) { /* signature print preview can still work without stored images */ }
+  return signatures;
+}
+
+function getAckCanvasPoint(canvas, event){
+  const rect = canvas.getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function initAckSignaturePad(){
+  const canvas = document.getElementById('ackSignaturePad');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(320, Math.floor(rect.width || 460));
+  const height = 170;
+  canvas.width = Math.floor(width * ratio);
+  canvas.height = Math.floor(height * ratio);
+  canvas.style.height = height + 'px';
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = '#111827';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  _ackSignatureHasData = false;
+  _ackSignatureDrawing = false;
+
+  const start = event => {
+    event.preventDefault();
+    _ackSignatureDrawing = true;
+    canvas.setPointerCapture?.(event.pointerId);
+    const p = getAckCanvasPoint(canvas, event);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+  };
+  const move = event => {
+    if(!_ackSignatureDrawing) return;
+    event.preventDefault();
+    const p = getAckCanvasPoint(canvas, event);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    _ackSignatureHasData = true;
+    const status = document.getElementById('ackSignatureStatus');
+    if(status) status.textContent = 'Signature captured.';
+  };
+  const end = event => {
+    if(!_ackSignatureDrawing) return;
+    event.preventDefault();
+    _ackSignatureDrawing = false;
+    ctx.beginPath();
+  };
+
+  canvas.addEventListener('pointerdown', start);
+  canvas.addEventListener('pointermove', move);
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('pointerleave', end);
+}
+
+function clearAckSignature(){
+  initAckSignaturePad();
+  const status = document.getElementById('ackSignatureStatus');
+  if(status) status.textContent = 'Signature cleared. Please sign again.';
+}
+
+function getAckSignatureDataUrl(){
+  const canvas = document.getElementById('ackSignaturePad');
+  return canvas && _ackSignatureHasData ? canvas.toDataURL('image/png') : '';
+}
+
+async function saveAckSignature(ackId, signedName, signedAt, signatureDataUrl){
+  const res = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/tracker_state`, {
+    method: 'POST',
+    headers: {
+      apikey: AUDIT_SB_CONFIG.key,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal'
+    },
+    body: JSON.stringify({
+      key: 'audit_signature_' + ackId,
+      value: JSON.stringify({
+        finding_id: ackId,
+        staff_name: signedName,
+        signed_name: signedName,
+        signed_at: signedAt,
+        signature_data_url: signatureDataUrl
+      }),
+      updated_at: signedAt
+    })
+  });
+  if(!res.ok) throw new Error(await res.text());
+}
+
 // Shows the acknowledgment screen if the page was opened with ?ack=<id>.
 async function checkAckLink(){
   const params = new URLSearchParams(window.location.search);
@@ -1143,8 +1278,17 @@ async function checkAckLink(){
     <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Your response / explanation</label>
     <textarea id="ackComment" placeholder="Explain what happened, barriers, corrective action, or your response to the finding." style="width:100%;min-height:130px;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;font:15px Arial,sans-serif;">${escapeHtml(defaultComment)}</textarea>
 
-    <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Typed signature</label>
-    <input id="ackSignedName" type="text" value="${escapeHtml(defaultName)}" placeholder="Type your full name" style="width:100%;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;">
+    <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Printed name for record</label>
+    <input id="ackSignedName" type="text" value="${escapeHtml(defaultName)}" placeholder="Confirm your full name" style="width:100%;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;">
+
+    <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Drawn signature required</label>
+    <div style="background:#ffffff;border:1px solid #2e3947;border-radius:7px;margin-bottom:8px;overflow:hidden;">
+      <canvas id="ackSignaturePad" style="display:block;width:100%;height:170px;touch-action:none;cursor:crosshair;"></canvas>
+    </div>
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+      <span id="ackSignatureStatus" style="color:#8fa0b3;font-size:12px;">Sign above with finger, stylus, or mouse. Typed name alone will not submit.</span>
+      <button type="button" onclick="clearAckSignature()" style="background:transparent;border:1px solid #2e3947;color:#cbd5e1;padding:6px 10px;border-radius:6px;cursor:pointer;">Clear signature</button>
+    </div>
 
     <label style="display:flex;gap:8px;align-items:flex-start;color:#cbd5e1;font-size:13px;line-height:1.35;margin-bottom:16px;">
       <input id="ackConfirm" type="checkbox" style="margin-top:2px;">
@@ -1154,6 +1298,7 @@ async function checkAckLink(){
     <button id="ackSubmitButton" onclick="submitAcknowledgment('${escapeHtml(ackId)}')" style="background:#e8b840;color:#241d09;border:none;font-weight:700;padding:10px 16px;border-radius:7px;cursor:pointer;">${alreadyReturned ? 'Update signed response' : 'Submit signed variance response'}</button>
     <p id="ackSubmitStatus" style="color:#8fa0b3;font-size:12px;margin-top:12px;"></p>
   `;
+  setTimeout(initAckSignaturePad, 0);
 }
 
 async function submitAcknowledgment(ackId){
@@ -1161,13 +1306,18 @@ async function submitAcknowledgment(ackId){
   const button = document.getElementById('ackSubmitButton');
   const comment = String(document.getElementById('ackComment')?.value || '').trim();
   const signedName = String(document.getElementById('ackSignedName')?.value || '').trim();
+  const signatureDataUrl = getAckSignatureDataUrl();
   const confirmed = document.getElementById('ackConfirm')?.checked;
   if(!comment){
     if(status) status.textContent = 'Please enter your response or explanation before submitting.';
     return;
   }
   if(!signedName){
-    if(status) status.textContent = 'Please type your name as your signature.';
+    if(status) status.textContent = 'Please confirm your printed name before submitting.';
+    return;
+  }
+  if(!signatureDataUrl){
+    if(status) status.textContent = 'Please draw your signature in the signature box before submitting.';
     return;
   }
   if(!confirmed){
@@ -1178,6 +1328,7 @@ async function submitAcknowledgment(ackId){
   if(button) button.disabled = true;
   try {
     const signedAt = new Date().toISOString();
+    await saveAckSignature(ackId, signedName, signedAt, signatureDataUrl);
     const ackResponse = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
       method: 'POST',
       headers: {
@@ -1216,6 +1367,13 @@ async function submitAcknowledgment(ackId){
       entries[idx].variance.receivedAutomatically = true;
       saveEntries(entries);
     }
+    signatureByFinding.set(ackId, {
+      finding_id: ackId,
+      staff_name: signedName,
+      signed_name: signedName,
+      signed_at: signedAt,
+      signature_data_url: signatureDataUrl
+    });
     acknowledgmentByFinding.set(ackId, {
       finding_id: ackId,
       staff_name: signedName,
@@ -1480,6 +1638,10 @@ function variancePrintSection(e){
   const employee = (ack && (ack.signed_name || ack.staff_name)) || (e.staff || []).join(', ') || '—';
   const response = ack && ack.comment ? ack.comment : (e.variance && e.variance.receivedAutomatically ? 'Employee signed the online acknowledgment.' : 'Variance form was manually marked as returned.');
   const signedAt = ack && ack.signed_at ? new Date(ack.signed_at).toLocaleString('en-US') : fmtDate(e.variance && e.variance.dateReceived);
+  const signature = signatureByFinding.get(e.id) || {};
+  const signatureImg = signature.signature_data_url
+    ? `<img src="${signature.signature_data_url}" alt="Employee drawn signature" style="max-width:280px;max-height:95px;display:block;margin-top:6px;">`
+    : '<span>Drawn electronic signature required on submission.</span>';
   return `<section class="form">
     <div class="brand">ARNOT OGDEN MEDICAL CENTER · 3B/3C STROKE TELEMETRY</div>
     <h1>Returned Variance Form</h1>
@@ -1495,7 +1657,8 @@ function variancePrintSection(e){
     </div>
     <h2>Finding</h2><p>${escapeHtml(summarize(e) || '—')}</p>
     <h2>Employee response</h2><p>${escapeHtml(response)}</p>
-    <div class="signature"><div><b>Signed by</b><span>${escapeHtml(employee)}</span></div><div><b>Signed / received</b><span>${escapeHtml(signedAt || '—')}</span></div></div>
+    <div class="signature"><div><b>Printed name</b><span>${escapeHtml(employee)}</span></div><div><b>Signed / received</b><span>${escapeHtml(signedAt || '—')}</span></div></div>
+    <div class="signature-image"><b>Employee drawn signature</b>${signatureImg}</div>
     <div class="manager"><b>Manager follow-up / action taken</b><div></div></div>
     <div class="manager-sign"><span>Manager signature</span><span>Date</span></div>
   </section>`;
@@ -1505,7 +1668,7 @@ function openPrintWindow(forms, title){
   const popup = window.open('', '_blank');
   if(!popup){ alert('The print window was blocked. Allow pop-ups for this site and try again.'); return; }
   popup.document.write(`<!doctype html><html><head><title>${escapeHtml(title)}</title><style>
-    @page{size:letter;margin:.55in}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#152238;margin:0}.form{page-break-after:always}.form:last-child{page-break-after:auto}.brand{color:#b08a1d;font-size:11px;font-weight:700;letter-spacing:.08em;border-bottom:3px solid #102d54;padding-bottom:8px}h1{color:#102d54;font-family:Georgia,serif;margin:14px 0 18px}h2{font-size:12px;color:#102d54;text-transform:uppercase;letter-spacing:.05em;margin:18px 0 6px}p{border:1px solid #bdc7d2;border-radius:4px;padding:10px;min-height:42px;white-space:pre-wrap}.grid,.signature{display:grid;grid-template-columns:1fr 1fr;border:1px solid #bdc7d2}.grid div,.signature div{padding:9px 10px;border-bottom:1px solid #d7dee5}.grid div:nth-child(odd),.signature div:first-child{border-right:1px solid #d7dee5}.grid div:nth-last-child(-n+2){border-bottom:0}b{display:block;font-size:10px;text-transform:uppercase;color:#5b6878;margin-bottom:4px}span{font-size:13px}.signature{margin-top:18px}.manager{margin-top:20px}.manager>div{height:75px;border:1px solid #bdc7d2;margin-top:6px}.manager-sign{display:grid;grid-template-columns:2fr 1fr;gap:35px;margin-top:28px}.manager-sign span{border-top:1px solid #333;padding-top:5px;font-size:10px;color:#5b6878}@media print{button{display:none}}
+    @page{size:letter;margin:.55in}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#152238;margin:0}.form{page-break-after:always}.form:last-child{page-break-after:auto}.brand{color:#b08a1d;font-size:11px;font-weight:700;letter-spacing:.08em;border-bottom:3px solid #102d54;padding-bottom:8px}h1{color:#102d54;font-family:Georgia,serif;margin:14px 0 18px}h2{font-size:12px;color:#102d54;text-transform:uppercase;letter-spacing:.05em;margin:18px 0 6px}p{border:1px solid #bdc7d2;border-radius:4px;padding:10px;min-height:42px;white-space:pre-wrap}.grid,.signature{display:grid;grid-template-columns:1fr 1fr;border:1px solid #bdc7d2}.grid div,.signature div{padding:9px 10px;border-bottom:1px solid #d7dee5}.grid div:nth-child(odd),.signature div:first-child{border-right:1px solid #d7dee5}.grid div:nth-last-child(-n+2){border-bottom:0}b{display:block;font-size:10px;text-transform:uppercase;color:#5b6878;margin-bottom:4px}span{font-size:13px}.signature{margin-top:18px}.signature-image{border:1px solid #bdc7d2;border-top:0;padding:10px;min-height:80px}.signature-image img{background:#fff}.manager{margin-top:20px}.manager>div{height:75px;border:1px solid #bdc7d2;margin-top:6px}.manager-sign{display:grid;grid-template-columns:2fr 1fr;gap:35px;margin-top:28px}.manager-sign span{border-top:1px solid #333;padding-top:5px;font-size:10px;color:#5b6878}@media print{button{display:none}}
   </style></head><body>${forms}<script>window.onload=()=>{window.print()}<\/script></body></html>`);
   popup.document.close();
 }
