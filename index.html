@@ -283,6 +283,25 @@
         <div id="smartsheetSourceButtons" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"></div>
       </div>
       <div class="field">
+        <label>Work computer PHI display</label>
+        <p class="hint" style="margin-bottom:8px;">Patient and MR# values only display when this browser is trusted and the PHI password is unlocked for the current session. The shared audit list stays de-identified.</p>
+        <div class="field-row">
+          <div class="field" style="margin-bottom:0;">
+            <input type="password" id="phiPasswordInput" autocomplete="current-password" placeholder="Enter PHI password">
+          </div>
+          <div class="field" style="margin-bottom:0;">
+            <input type="password" id="phiPasswordConfirm" autocomplete="new-password" placeholder="Repeat to set/change">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+          <button class="ghost small" type="button" onclick="unlockPhiDisplay()">Unlock PHI</button>
+          <button class="ghost small" type="button" onclick="setPhiPasswordFromFields()">Set/change password</button>
+          <button class="ghost small" type="button" onclick="lockPhiDisplay()">Lock PHI</button>
+          <button class="ghost small" type="button" onclick="forgetTrustedWorkComputer()">Remove trust</button>
+          <span id="phiTrustStatus" class="hint" style="margin:0;"></span>
+        </div>
+      </div>
+      <div class="field">
         <label>Import latest Smartsheet export</label>
         <input type="file" id="auditImportFile" accept=".csv,text/csv">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
@@ -303,6 +322,9 @@
 const ENTRIES_KEY = 'auditEntries_v2';
 const DIRECTORY_KEY = 'auditEmployeeDirectory';
 const CC_KEY = 'auditVarianceCC';
+const PHI_TRUST_KEY = 'auditPhiTrustedWorkComputer_v1';
+const PHI_PASSWORD_KEY = 'auditPhiPassword_v1';
+const PHI_UNLOCK_KEY = 'auditPhiUnlockedSession_v1';
 
 const AUDIT_TYPES = {
   chart: { label: 'Chart Audit', short: 'Chart' },
@@ -1038,6 +1060,153 @@ function simpleHash(value){
   return Math.abs(h).toString(36);
 }
 
+function safeStorageGet(store, key, fallback = ''){
+  try { return store.getItem(key) || fallback; } catch(e) { return fallback; }
+}
+
+function safeStorageSet(store, key, value){
+  try { store.setItem(key, value); } catch(e) {}
+}
+
+function safeStorageRemove(store, key){
+  try { store.removeItem(key); } catch(e) {}
+}
+
+function loadPhiPasswordConfig(){
+  try {
+    const raw = localStorage.getItem(PHI_PASSWORD_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) {
+    return null;
+  }
+}
+
+function hasPhiPassword(){
+  const config = loadPhiPasswordConfig();
+  return !!(config && config.salt && config.hash);
+}
+
+function isPhiTrusted(){
+  return safeStorageGet(localStorage, PHI_TRUST_KEY) === 'yes';
+}
+
+function isPhiUnlocked(){
+  return safeStorageGet(sessionStorage, PHI_UNLOCK_KEY) === 'yes';
+}
+
+function canShowPhi(){
+  return hasPhiPassword() && isPhiTrusted() && isPhiUnlocked();
+}
+
+function randomHexSalt(){
+  const bytes = new Uint8Array(16);
+  if(window.crypto && crypto.getRandomValues){
+    crypto.getRandomValues(bytes);
+  } else {
+    for(let i=0;i<bytes.length;i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return Array.from(bytes, b => b.toString(16).padStart(2,'0')).join('');
+}
+
+async function sha256Hex(text){
+  if(window.crypto && crypto.subtle && window.TextEncoder){
+    const bytes = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2,'0')).join('');
+  }
+  return 'fallback-' + simpleHash(text);
+}
+
+async function phiPasswordHash(password, salt){
+  return sha256Hex(`${salt}:${password}`);
+}
+
+function clearPhiPasswordFields(){
+  ['phiPasswordInput','phiPasswordConfirm'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.value = '';
+  });
+}
+
+function renderPhiControls(){
+  const statusEl = document.getElementById('phiTrustStatus');
+  if(!statusEl) return;
+  if(!hasPhiPassword()){
+    statusEl.textContent = 'PHI password not set on this browser. Patient/MR# hidden.';
+  } else if(canShowPhi()){
+    statusEl.textContent = 'PHI unlocked on this trusted browser for this session.';
+  } else if(isPhiTrusted()){
+    statusEl.textContent = 'Trusted work computer. PHI locked until password is entered.';
+  } else {
+    statusEl.textContent = 'This browser is not trusted. Unlock with the PHI password to trust it.';
+  }
+}
+
+async function setPhiPasswordFromFields(){
+  const password = document.getElementById('phiPasswordInput')?.value || '';
+  const confirmPassword = document.getElementById('phiPasswordConfirm')?.value || '';
+  if(hasPhiPassword() && !canShowPhi()){
+    alert('Unlock PHI with the current password before changing it.');
+    return;
+  }
+  if(password.length < 6){
+    alert('Use at least 6 characters for the PHI password.');
+    return;
+  }
+  if(password !== confirmPassword){
+    alert('The PHI password entries do not match.');
+    return;
+  }
+  const salt = randomHexSalt();
+  const hash = await phiPasswordHash(password, salt);
+  safeStorageSet(localStorage, PHI_PASSWORD_KEY, JSON.stringify({ salt, hash, createdAt: new Date().toISOString() }));
+  safeStorageSet(localStorage, PHI_TRUST_KEY, 'yes');
+  safeStorageSet(sessionStorage, PHI_UNLOCK_KEY, 'yes');
+  clearPhiPasswordFields();
+  renderPhiControls();
+  renderAll();
+  alert('PHI password saved. This browser is now trusted and unlocked for this session.');
+}
+
+async function unlockPhiDisplay(){
+  const config = loadPhiPasswordConfig();
+  if(!config || !config.salt || !config.hash){
+    alert('Set a PHI password on this work computer first.');
+    return;
+  }
+  const password = document.getElementById('phiPasswordInput')?.value || '';
+  if(!password){
+    alert('Enter the PHI password first.');
+    return;
+  }
+  const hash = await phiPasswordHash(password, config.salt);
+  if(hash !== config.hash){
+    safeStorageRemove(sessionStorage, PHI_UNLOCK_KEY);
+    renderPhiControls();
+    alert('PHI password did not match.');
+    return;
+  }
+  safeStorageSet(localStorage, PHI_TRUST_KEY, 'yes');
+  safeStorageSet(sessionStorage, PHI_UNLOCK_KEY, 'yes');
+  clearPhiPasswordFields();
+  renderPhiControls();
+  renderAll();
+}
+
+function lockPhiDisplay(){
+  safeStorageRemove(sessionStorage, PHI_UNLOCK_KEY);
+  renderPhiControls();
+  renderAll();
+}
+
+function forgetTrustedWorkComputer(){
+  if(!confirm('Remove this browser as the trusted work computer and hide patient/MR#?')) return;
+  safeStorageRemove(localStorage, PHI_TRUST_KEY);
+  safeStorageRemove(sessionStorage, PHI_UNLOCK_KEY);
+  renderPhiControls();
+  renderAll();
+}
+
 function collectImportTags(row){
   const tags = [];
   const skip = new Set([
@@ -1151,6 +1320,11 @@ async function importAuditCsv(){
   const statusEl = document.getElementById('auditImportStatus');
   const file = input && input.files && input.files[0];
   if(!file){ alert('Choose a Smartsheet CSV export first.'); return; }
+  if(!canShowPhi()){
+    if(statusEl) statusEl.textContent = 'PHI locked. Unlock the trusted work computer before importing.';
+    alert('Unlock PHI in Settings before importing a Smartsheet CSV with patient/MR# values. This keeps PHI from being stored on an untrusted browser.');
+    return;
+  }
   if(statusEl) statusEl.textContent = 'Reading CSV...';
   try {
     const text = await file.text();
@@ -1890,14 +2064,20 @@ function staffChips(staff){
   return staff.map(s=>`<span class="staff-chip">${s}</span>`).join('');
 }
 function protectedPhiLabel(){
-  return '<span style="color:var(--muted);font-size:12px;" title="Patient identifiers are not stored in the shared public summary table. Import the latest Smartsheet CSV on this work computer to show them locally.">Protected</span>';
+  let title = 'Patient identifiers are not stored in the shared public summary table. Import the latest Smartsheet CSV on this work computer to show them locally.';
+  if(!hasPhiPassword()) title = 'PHI hidden. Set a PHI password in Settings on the work computer.';
+  else if(!isPhiTrusted()) title = 'PHI hidden. Unlock with the PHI password to trust this work computer.';
+  else if(!isPhiUnlocked()) title = 'PHI hidden. Unlock the PHI password in Settings for this session.';
+  return `<span style="color:var(--muted);font-size:12px;" title="${escapeHtml(title)}">Protected</span>`;
 }
 function patientCell(e){
   const patient = cleanPhiValue(e.patient);
+  if(!canShowPhi()) return (patient || e.sharedSummaryOnly) ? protectedPhiLabel() : '—';
   return patient ? escapeHtml(patient) : (e.sharedSummaryOnly ? protectedPhiLabel() : '—');
 }
 function mrnCell(e){
   const mrn = cleanPhiValue(e.mrn);
+  if(!canShowPhi()) return (mrn || e.sharedSummaryOnly) ? protectedPhiLabel() : '—';
   return mrn ? escapeHtml(mrn) : (e.sharedSummaryOnly ? protectedPhiLabel() : '—');
 }
 function varianceLabel(v, entry){
@@ -2265,7 +2445,11 @@ function buildChecklistHTML(type, entry){
 function renderModalBody(entry){
   const type = modalType;
   const body = document.getElementById('modalBody');
-  const showPatientMRN = true;
+  const phiAllowed = canShowPhi();
+  const patientValue = phiAllowed ? cleanPhiValue(entry?.patient) : '';
+  const mrnValue = phiAllowed ? cleanPhiValue(entry?.mrn) : '';
+  const phiInputState = phiAllowed ? '' : 'disabled';
+  const phiPlaceholder = phiAllowed ? '' : 'Unlock PHI in Settings';
 
   let html = `
     <div class="field">
@@ -2294,13 +2478,14 @@ function renderModalBody(entry){
     <div class="field-row">
       <div class="field">
         <label>Patient (initials or name)</label>
-        <input type="text" id="fPatient" value="${entry?.patient || ''}" placeholder="e.g. XYZ">
+        <input type="text" id="fPatient" value="${escapeHtml(patientValue)}" placeholder="${phiAllowed ? 'e.g. XYZ' : phiPlaceholder}" ${phiInputState}>
       </div>
       <div class="field">
         <label>MR#</label>
-        <input type="text" id="fMRN" value="${entry?.mrn || ''}" placeholder="e.g. 1234567890">
+        <input type="text" id="fMRN" value="${escapeHtml(mrnValue)}" placeholder="${phiAllowed ? 'e.g. 1234567890' : phiPlaceholder}" ${phiInputState}>
       </div>
     </div>
+    ${phiAllowed ? '' : '<p class="hint">Patient/MR# fields are locked. Open Settings and unlock PHI on the trusted work computer to view or edit them.</p>'}
     <div class="field">
       <label>Context (unit / shift / visit#, optional)</label>
       <input type="text" id="fContext" value="${entry?.context || ''}" placeholder="e.g. Unit 3B, Night shift 08/13/26">
@@ -2397,14 +2582,17 @@ async function saveEntry(){
   const over24h = document.getElementById('over24h')?.checked || false;
   const context = document.getElementById('fContext').value.trim();
   const issue = formatCommaSeparatedIssueText(document.getElementById('fIssue').value.trim());
+  let entries = loadEntries();
+  const existingEntry = editingId ? entries.find(e=>e.id===editingId) : null;
+  const phiAllowed = canShowPhi();
 
   const data = {
     type,
     date: document.getElementById('fDate').value,
     auditLineNumber: document.getElementById('fAuditLineNumber').value.trim(),
     status: document.getElementById('fStatus').value,
-    patient: document.getElementById('fPatient').value.trim(),
-    mrn: document.getElementById('fMRN').value.trim(),
+    patient: phiAllowed ? cleanPhiValue(document.getElementById('fPatient').value.trim()) : cleanPhiValue(existingEntry?.patient),
+    mrn: phiAllowed ? cleanPhiValue(document.getElementById('fMRN').value.trim()) : cleanPhiValue(existingEntry?.mrn),
     context,
     unit: inferUnitFromText(context),
     items,
@@ -2422,7 +2610,6 @@ async function saveEntry(){
     }
   };
 
-  let entries = loadEntries();
   if(editingId){
     const idx = entries.findIndex(e=>e.id===editingId);
     if(idx>-1) entries[idx] = {...entries[idx], ...data};
@@ -2561,6 +2748,7 @@ async function openSettings(){
   if (_ccDirectoryCache === null) await fetchCcDirectory();
   renderDirectoryChips();
   renderSmartsheetSourceButtons();
+  renderPhiControls();
   document.getElementById('ccList').value = loadCC();
   document.getElementById('settingsOverlay').classList.add('show');
 }
