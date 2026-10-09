@@ -388,26 +388,139 @@ function escapeHtml(value){
 let _ccDirectoryCache = null;
 let _ccDirectoryPromise = null;
 let _ccDirectoryEmailByName = new Map();
+
+function normalizeDirectoryName(name){
+  const raw = String(name || '')
+    .toLocaleLowerCase()
+    .replace(/\b(rn|lpn|ca|uc|agency|traveler|travel|float|sitter)\b/g, ' ')
+    .replace(/[^a-z,\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if(!raw) return '';
+  if(raw.includes(',')){
+    const parts = raw.split(',');
+    const last = (parts[0] || '').trim().split(/\s+/).filter(Boolean).slice(-1)[0] || '';
+    const first = (parts.slice(1).join(' ') || '').trim().split(/\s+/)[0] || '';
+    return [first, last].filter(Boolean).join(' ');
+  }
+  const parts = raw.split(/\s+/).filter(Boolean);
+  if(parts.length >= 2) return `${parts[0]} ${parts[parts.length - 1]}`;
+  return raw;
+}
+
+function addCcDirectoryEmail(name, email){
+  const displayName = String(name || '').trim();
+  const cleanEmail = String(email || '').trim();
+  if(!displayName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) return;
+  const keys = [displayName.toLocaleLowerCase(), normalizeDirectoryName(displayName)].filter(Boolean);
+  keys.forEach(key=>{
+    if(!_ccDirectoryEmailByName.has(key)) _ccDirectoryEmailByName.set(key, cleanEmail);
+  });
+}
+
+function getCcDirectoryEmail(name){
+  const displayName = String(name || '').trim();
+  if(!displayName) return '';
+  return _ccDirectoryEmailByName.get(displayName.toLocaleLowerCase())
+    || _ccDirectoryEmailByName.get(normalizeDirectoryName(displayName))
+    || '';
+}
+
+function parseCcStatePayload(value){
+  if(!value) return null;
+  let parsed = value;
+  if(typeof parsed === 'string'){
+    try { parsed = JSON.parse(parsed); } catch(e) { return null; }
+  }
+  if(parsed && typeof parsed.value === 'string'){
+    try { return JSON.parse(parsed.value); } catch(e) { return null; }
+  }
+  return parsed && typeof parsed === 'object' ? parsed : null;
+}
+
+function mergeCcStateEmails(stateObj){
+  const names = [];
+  if(!stateObj || typeof stateObj !== 'object') return names;
+  Object.entries(stateObj.emails || {}).forEach(([name,email])=>{
+    if(email){
+      names.push(name);
+      addCcDirectoryEmail(name, email);
+    }
+  });
+  (stateObj.customStaff || []).forEach(staff=>{
+    if(staff && staff.name) names.push(staff.name);
+  });
+  return names;
+}
+
+function loadCcLocalDirectoryEmails(){
+  const names = [];
+  ['3B_StaffApp_v1','_3bTracker'].forEach(key=>{
+    try {
+      const parsed = parseCcStatePayload(localStorage.getItem(key));
+      names.push(...mergeCcStateEmails(parsed));
+    } catch(e) {}
+  });
+  return names.filter(Boolean);
+}
+
+async function loadCcSharedStateEmails(){
+  try {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/tracker_state?key=eq.app_state&select=value&limit=1`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key }
+    });
+    if(!r.ok) throw new Error(`CC app state request failed (${r.status})`);
+    const rows = await r.json();
+    return rows.flatMap(row=>mergeCcStateEmails(parseCcStatePayload(row.value)));
+  } catch(e) {
+    console.warn('CC saved email fallback failed:', e);
+    return [];
+  }
+}
+
+async function refreshCcDirectoryEmails(){
+  loadCcLocalDirectoryEmails();
+  if(_ccDirectoryCache === null) await fetchCcDirectory();
+  else loadCcLocalDirectoryEmails();
+}
+
 async function fetchCcDirectory(){
   if (_ccDirectoryPromise) return _ccDirectoryPromise;
   _ccDirectoryPromise = (async()=>{
+    let publicError = null;
     try {
-      const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=display_name,email&order=display_name.asc`, {
-        headers: { apikey: AUDIT_SB_CONFIG.key }
-      });
-      if (!r.ok) throw new Error(`CC directory request failed (${r.status})`);
-      const rows = await r.json();
-      _ccDirectoryCache = [...new Set(rows.map(row => row.display_name).filter(Boolean))];
       _ccDirectoryEmailByName = new Map();
-      rows.forEach(row=>{
-        const name = String(row.display_name || '').trim();
-        const email = String(row.email || '').trim();
-        const key = name.toLocaleLowerCase();
-        if(name && email && !_ccDirectoryEmailByName.has(key)) _ccDirectoryEmailByName.set(key, email);
+      const localNames = loadCcLocalDirectoryEmails();
+      let publicRows = [];
+      try {
+        const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/employee_directory_public?select=display_name,email&order=display_name.asc`, {
+          headers: { apikey: AUDIT_SB_CONFIG.key }
+        });
+        if (!r.ok) throw new Error(`CC directory request failed (${r.status})`);
+        publicRows = await r.json();
+      } catch(e) {
+        publicError = e;
+      }
+
+      publicRows.forEach(row=>{
+        addCcDirectoryEmail(row.display_name, row.email);
       });
+
+      const sharedNames = await loadCcSharedStateEmails();
+      _ccDirectoryCache = [...new Set([
+        ...publicRows.map(row => row.display_name),
+        ...sharedNames,
+        ...localNames
+      ].map(name => String(name || '').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+
       const status = document.getElementById('ccDirectoryStatus');
-      if (status) status.textContent = `${_ccDirectoryCache.length} staff names available from CC.`;
+      if (status) {
+        status.textContent = publicError && !_ccDirectoryCache.length
+          ? 'CC directory could not be reached. Use Refresh staff names or check the connection.'
+          : `${_ccDirectoryCache.length} staff names available from CC.`;
+      }
       showTemporaryStatus(`Loaded ${_ccDirectoryCache.length} staff names from CC.`);
+      if(publicError) console.warn('CC public directory failed; used saved CC state instead:', publicError);
     } catch(e) {
       if (_ccDirectoryCache === null) _ccDirectoryCache = [];
       const status = document.getElementById('ccDirectoryStatus');
@@ -1807,9 +1920,9 @@ function emailRecipients(value){
 async function sendVariance(id){
   const e = loadEntries().find(x=>x.id===id);
   if(!e) return;
-  if(_ccDirectoryCache === null) await fetchCcDirectory();
+  await refreshCcDirectoryEmails();
   const staffEmails = (e.staff || [])
-    .map(name=>_ccDirectoryEmailByName.get(String(name || '').trim().toLocaleLowerCase()))
+    .map(name=>getCcDirectoryEmail(name))
     .filter(Boolean);
   const suggestedEmails = emailRecipients(e.suggestedCC);
   const configuredEmails = emailRecipients(loadCC());
