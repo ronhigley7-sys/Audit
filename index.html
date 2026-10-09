@@ -413,7 +413,10 @@ let editingId = null;
 let modalType = 'chart';
 let modalStaff = [];
 let acknowledgmentByFinding = new Map();
+let acknowledgmentByFindingStaff = new Map();
+let acknowledgmentRowsByFinding = new Map();
 let signatureByFinding = new Map();
+let signatureByFindingStaff = new Map();
 let _ackSignatureHasData = false;
 let _ackSignatureDrawing = false;
 let auditLineSearch = '';
@@ -805,29 +808,37 @@ async function loadAcknowledgmentReturns(renderAfter){
     });
     if(!r.ok) return;
     const rows = await r.json();
-    signatureByFinding = await loadSignatureReturns();
+    const signatureMaps = await loadSignatureReturns();
+    signatureByFinding = signatureMaps.byFinding;
+    signatureByFindingStaff = signatureMaps.byStaff;
     acknowledgmentByFinding = new Map();
+    acknowledgmentByFindingStaff = new Map();
+    acknowledgmentRowsByFinding = new Map();
+    const seenStaffRows = new Set();
     rows.forEach(row => {
-      if(row.finding_id && !acknowledgmentByFinding.has(row.finding_id)) acknowledgmentByFinding.set(row.finding_id, row);
+      if(!row.finding_id) return;
+      if(!acknowledgmentByFinding.has(row.finding_id)) acknowledgmentByFinding.set(row.finding_id, row);
+      const staffKey = acknowledgmentStaffKey(row.finding_id, rowStaffName(row));
+      if(staffKey && !acknowledgmentByFindingStaff.has(staffKey)) acknowledgmentByFindingStaff.set(staffKey, row);
+      const rowKey = staffKey || (row.finding_id + '::row_' + row.id);
+      if(seenStaffRows.has(rowKey)) return;
+      seenStaffRows.add(rowKey);
+      if(!acknowledgmentRowsByFinding.has(row.finding_id)) acknowledgmentRowsByFinding.set(row.finding_id, []);
+      acknowledgmentRowsByFinding.get(row.finding_id).push(row);
     });
-
     const entries = loadEntries();
     let changed = false;
     entries.forEach(entry => {
-      const ack = acknowledgmentByFinding.get(entry.id);
-      if(!ack) return;
+      const summary = entryReturnSummary(entry);
+      if(!summary.returned) return;
       entry.variance = entry.variance || {};
-      if(entry.variance.status !== 'received') {
-        entry.variance.status = 'received';
-        changed = true;
-      }
-      const receivedDate = ack.signed_at ? String(ack.signed_at).slice(0,10) : new Date().toISOString().slice(0,10);
-      if(entry.variance.dateReceived !== receivedDate) {
-        entry.variance.dateReceived = receivedDate;
-        changed = true;
-      }
-      if(!entry.variance.receivedAutomatically) {
-        entry.variance.receivedAutomatically = true;
+      const nextStatus = summary.allReturned ? 'received' : 'sent';
+      if(entry.variance.status !== nextStatus) { entry.variance.status = nextStatus; changed = true; }
+      if(summary.latestDate && entry.variance.dateReceived !== summary.latestDate) { entry.variance.dateReceived = summary.latestDate; changed = true; }
+      if(!entry.variance.receivedAutomatically) { entry.variance.receivedAutomatically = true; changed = true; }
+      if(entry.variance.returnedCount !== summary.returned || entry.variance.returnedTotal !== summary.total) {
+        entry.variance.returnedCount = summary.returned;
+        entry.variance.returnedTotal = summary.total;
         changed = true;
       }
     });
@@ -1100,8 +1111,108 @@ function auditBaseUrl(){
   return 'https://ronhigley7-sys.github.io/Audit/';
 }
 
-function acknowledgmentUrl(id){
-  return auditBaseUrl() + '?ack=' + encodeURIComponent(id || '');
+function acknowledgmentUrl(id, staffName){
+  const url = new URL(auditBaseUrl(), window.location.href);
+  url.searchParams.set('ack', id || '');
+  if(staffName) url.searchParams.set('staff', staffName);
+  return url.toString();
+}
+
+function staffNameKey(name){
+  return normalizeDirectoryName(name) || String(name || '')
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function rowStaffName(row){
+  return String((row && (row.signed_name || row.staff_name)) || '').trim();
+}
+
+function acknowledgmentStaffKey(findingId, staffName){
+  const key = staffNameKey(staffName);
+  return findingId && key ? findingId + '::' + key : '';
+}
+
+function signatureStorageKey(findingId, staffName){
+  const key = staffNameKey(staffName) || 'unspecified';
+  return 'audit_signature_' + findingId + '_' + simpleHash(key);
+}
+
+function entryRequiredStaff(entry){
+  const seen = new Set();
+  const names = [];
+  ((entry && entry.staff) || []).forEach(name => {
+    const clean = String(name || '').trim();
+    const key = staffNameKey(clean);
+    if(clean && key && !seen.has(key)){
+      seen.add(key);
+      names.push(clean);
+    }
+  });
+  return names;
+}
+
+function acknowledgmentRowsForEntry(entry){
+  return (entry && entry.id && acknowledgmentRowsByFinding.get(entry.id)) || [];
+}
+
+function acknowledgmentForStaff(findingId, staffName){
+  return acknowledgmentByFindingStaff.get(acknowledgmentStaffKey(findingId, staffName));
+}
+
+function returnedRecordsForEntry(entry){
+  if(!entry) return [];
+  const rows = acknowledgmentRowsForEntry(entry);
+  const records = [];
+  const seen = new Set();
+  rows.forEach(row => {
+    const name = rowStaffName(row);
+    const key = acknowledgmentStaffKey(entry.id, name) || (entry.id + '::row_' + row.id);
+    if(seen.has(key)) return;
+    seen.add(key);
+    records.push({ entry, ack: row, staffName: name || 'Employee', staffKey: key });
+  });
+  if(!records.length && entry.variance && entry.variance.status === 'received'){
+    records.push({ entry, ack: null, staffName: (entry.staff || []).join(', ') || 'Employee', staffKey: entry.id + '::manual' });
+  }
+  return records;
+}
+
+function entryReturnSummary(entry){
+  const required = entryRequiredStaff(entry);
+  const rows = acknowledgmentRowsForEntry(entry);
+  const returnedKeys = new Set(rows.map(row => acknowledgmentStaffKey(entry.id, rowStaffName(row))).filter(Boolean));
+  const returnedRequired = required.filter(name => returnedKeys.has(acknowledgmentStaffKey(entry.id, name)));
+  const extraReturned = rows
+    .map(row => rowStaffName(row))
+    .filter(name => name && !required.some(staff => acknowledgmentStaffKey(entry.id, staff) === acknowledgmentStaffKey(entry.id, name)));
+  const returnedNames = required.length
+    ? [...returnedRequired, ...extraReturned]
+    : (rows.map(row => rowStaffName(row)).filter(Boolean));
+  const total = required.length || (returnedNames.length ? returnedNames.length : ((entry.variance && entry.variance.status === 'received') ? 1 : 0));
+  const returned = required.length ? Math.min(returnedNames.length, total) : (returnedNames.length || ((entry.variance && entry.variance.status === 'received') ? 1 : 0));
+  const pending = required.filter(name => !returnedKeys.has(acknowledgmentStaffKey(entry.id, name)));
+  const latest = rows[0] || null;
+  const latestDate = latest && latest.signed_at ? String(latest.signed_at).slice(0,10) : ((entry.variance && entry.variance.dateReceived) || '');
+  return { total, returned, pending, returnedNames, latestDate, allReturned: total > 0 && returned >= total };
+}
+
+function nextPendingStaffName(entry){
+  const summary = entryReturnSummary(entry);
+  return summary.pending[0] || entryRequiredStaff(entry)[0] || '';
+}
+
+function hasReturnedForms(entry){
+  return returnedRecordsForEntry(entry).length > 0;
+}
+
+function varianceCanMarkReceived(entry){
+  const status = (entry && entry.variance && entry.variance.status) || 'not_sent';
+  if(status === 'na') return false;
+  const summary = entryReturnSummary(entry);
+  return status === 'sent' || (summary.returned > 0 && !summary.allReturned);
 }
 
 async function fetchAcknowledgmentEntry(ackId){
@@ -1190,7 +1301,7 @@ function parseAuditSignaturePayload(value){
 }
 
 async function loadSignatureReturns(){
-  const signatures = new Map();
+  const signatures = { byFinding: new Map(), byStaff: new Map() };
   try {
     const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/tracker_state?key=like.audit_signature_*&select=key,value`, {
       headers: { apikey: AUDIT_SB_CONFIG.key }
@@ -1199,8 +1310,11 @@ async function loadSignatureReturns(){
     const rows = await r.json();
     rows.forEach(row=>{
       const payload = parseAuditSignaturePayload(row.value);
-      const id = payload && (payload.finding_id || String(row.key || '').replace(/^audit_signature_/, ''));
-      if(id && payload) signatures.set(id, payload);
+      const id = payload && (payload.finding_id || String(row.key || '').replace(/^audit_signature_/, '').replace(/_[^_]+$/, ''));
+      if(!id || !payload) return;
+      if(!signatures.byFinding.has(id)) signatures.byFinding.set(id, payload);
+      const staffKey = acknowledgmentStaffKey(id, payload.staff_name || payload.signed_name);
+      if(staffKey && !signatures.byStaff.has(staffKey)) signatures.byStaff.set(staffKey, payload);
     });
   } catch(error) { /* signature print preview can still work without stored images */ }
   return signatures;
@@ -1284,9 +1398,10 @@ async function saveAckSignature(ackId, signedName, signedAt, signatureDataUrl){
       Prefer: 'resolution=merge-duplicates,return=minimal'
     },
     body: JSON.stringify({
-      key: 'audit_signature_' + ackId,
+      key: signatureStorageKey(ackId, signedName),
       value: JSON.stringify({
         finding_id: ackId,
+        staff_key: staffNameKey(signedName),
         staff_name: signedName,
         signed_name: signedName,
         signed_at: signedAt,
@@ -1309,17 +1424,31 @@ async function checkAckLink(){
   content.innerHTML = '<h2 style="margin-top:0;">Loading variance follow-up...</h2>';
   const entry = await fetchAcknowledgmentEntry(ackId);
   if(!entry){
-    content.innerHTML = '<h2 style="margin-top:0;">Variance link not found</h2><p style="color:#9aa4b2;">Ask leadership to resend the variance email or check the audit line number.</p>';
+    content.innerHTML = '<h2 style="margin-top:0;">Variance link not found</h2><p style="color:#9aa4b2;">Ask leadership to resend the variance link or check the audit line number.</p>';
     return;
   }
-  const existingAck = acknowledgmentByFinding.get(ackId) || {};
-  const alreadyReturned = entry.variance && entry.variance.status === 'received';
-  const defaultName = existingAck.signed_name || existingAck.staff_name || (entry.staff || [])[0] || '';
+  await loadAcknowledgmentReturns(false);
+  const staffParam = params.get('staff') || '';
+  const staffChoices = entryRequiredStaff(entry);
+  const defaultName = staffParam || nextPendingStaffName(entry) || (entry.staff || [])[0] || '';
+  const existingAck = acknowledgmentForStaff(ackId, defaultName) || acknowledgmentByFinding.get(ackId) || {};
+  const returnSummary = entryReturnSummary(entry);
+  const alreadyReturned = defaultName ? !!acknowledgmentForStaff(ackId, defaultName) : returnSummary.allReturned;
   const defaultComment = existingAck.comment || '';
+  const staffSelectHtml = staffChoices.length > 1 ? `
+    <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Your name</label>
+    <select id="ackStaffSelect" onchange="document.getElementById('ackSignedName').value=this.value || ''" style="width:100%;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;">
+      ${staffChoices.map(name => `<option value="${escapeHtml(name)}" ${staffNameKey(name)===staffNameKey(defaultName)?'selected':''}>${escapeHtml(name)}</option>`).join('')}
+      <option value="">Other / not listed</option>
+    </select>
+    <p style="color:#8fa0b3;font-size:12px;margin:-6px 0 14px;">Each listed staff member must submit their own signed return. ${returnSummary.returned}/${returnSummary.total || staffChoices.length} received so far.</p>
+  ` : '';
   content.innerHTML = `
     <h2 style="margin-top:0;">Variance Follow-up</h2>
     <p style="color:#9aa4b2;">Review the audit summary below. Complete the response, sign it, and submit it back to leadership.</p>
     <div style="margin:16px 0 20px;">${acknowledgmentDetailsHtml(entry)}</div>
+
+    ${staffSelectHtml}
 
     <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Your response / explanation</label>
     <textarea id="ackComment" placeholder="Explain what happened, barriers, corrective action, or your response to the finding." style="width:100%;min-height:130px;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;font:15px Arial,sans-serif;">${escapeHtml(defaultComment)}</textarea>
@@ -1351,56 +1480,45 @@ async function submitAcknowledgment(ackId){
   const status = document.getElementById('ackSubmitStatus');
   const button = document.getElementById('ackSubmitButton');
   const comment = String(document.getElementById('ackComment')?.value || '').trim();
-  const signedName = String(document.getElementById('ackSignedName')?.value || '').trim();
+  const selectedName = String(document.getElementById('ackStaffSelect')?.value || '').trim();
+  const signedName = String(document.getElementById('ackSignedName')?.value || selectedName || '').trim();
   const signatureDataUrl = getAckSignatureDataUrl();
   const confirmed = document.getElementById('ackConfirm')?.checked;
-  if(!comment){
-    if(status) status.textContent = 'Please enter your response or explanation before submitting.';
-    return;
-  }
-  if(!signedName){
-    if(status) status.textContent = 'Please confirm your printed name before submitting.';
-    return;
-  }
-  if(!signatureDataUrl){
-    if(status) status.textContent = 'Please draw your signature in the signature box before submitting.';
-    return;
-  }
-  if(!confirmed){
-    if(status) status.textContent = 'Please check the confirmation box before submitting.';
-    return;
-  }
+  if(!comment){ if(status) status.textContent = 'Please enter your response or explanation before submitting.'; return; }
+  if(!signedName){ if(status) status.textContent = 'Please confirm your printed name before submitting.'; return; }
+  if(!signatureDataUrl){ if(status) status.textContent = 'Please draw your signature in the signature box before submitting.'; return; }
+  if(!confirmed){ if(status) status.textContent = 'Please check the confirmation box before submitting.'; return; }
   if(status) status.textContent = 'Submitting signed variance response...';
   if(button) button.disabled = true;
   try {
     const signedAt = new Date().toISOString();
+    const entry = await fetchAcknowledgmentEntry(ackId);
     await saveAckSignature(ackId, signedName, signedAt, signatureDataUrl);
     const ackResponse = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
       method: 'POST',
-      headers: {
-        apikey: AUDIT_SB_CONFIG.key,
-        'Content-Type': 'application/json',
-        Prefer: 'return=minimal'
-      },
-      body: JSON.stringify({
-        finding_id: ackId,
-        staff_name: signedName,
-        status: 'acknowledged',
-        comment,
-        signed_name: signedName,
-        signed_at: signedAt
-      })
+      headers: { apikey: AUDIT_SB_CONFIG.key, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ finding_id: ackId, staff_name: signedName, status: 'acknowledged', comment, signed_name: signedName, signed_at: signedAt })
     });
     if(!ackResponse.ok) throw new Error(await ackResponse.text());
 
+    const ackRow = { finding_id: ackId, staff_name: signedName, status: 'acknowledged', comment, signed_name: signedName, signed_at: signedAt };
+    acknowledgmentByFinding.set(ackId, ackRow);
+    const staffKey = acknowledgmentStaffKey(ackId, signedName);
+    if(staffKey) acknowledgmentByFindingStaff.set(staffKey, ackRow);
+    const rows = (acknowledgmentRowsByFinding.get(ackId) || []).filter(row => acknowledgmentStaffKey(ackId, rowStaffName(row)) !== staffKey);
+    rows.unshift(ackRow);
+    acknowledgmentRowsByFinding.set(ackId, rows);
+
+    const signaturePayload = { finding_id: ackId, staff_key: staffNameKey(signedName), staff_name: signedName, signed_name: signedName, signed_at: signedAt, signature_data_url: signatureDataUrl };
+    signatureByFinding.set(ackId, signaturePayload);
+    if(staffKey) signatureByFindingStaff.set(staffKey, signaturePayload);
+
+    const summary = entryReturnSummary(entry || { id: ackId, staff: [] });
+    const nextVarianceStatus = summary.allReturned ? 'received' : 'sent';
     const response = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?id=eq.${encodeURIComponent(ackId)}`, {
       method: 'PATCH',
-      headers: {
-        apikey: AUDIT_SB_CONFIG.key,
-        'Content-Type': 'application/json',
-        Prefer: 'return=minimal'
-      },
-      body: JSON.stringify({ variance_status: 'received' })
+      headers: { apikey: AUDIT_SB_CONFIG.key, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ variance_status: nextVarianceStatus })
     });
     if(!response.ok) throw new Error(await response.text());
 
@@ -1408,27 +1526,18 @@ async function submitAcknowledgment(ackId){
     const idx = entries.findIndex(entry => entry.id === ackId);
     if(idx >= 0){
       entries[idx].variance = entries[idx].variance || {};
-      entries[idx].variance.status = 'received';
+      entries[idx].variance.status = nextVarianceStatus;
       entries[idx].variance.dateReceived = signedAt.slice(0,10);
       entries[idx].variance.receivedAutomatically = true;
+      entries[idx].variance.returnedCount = summary.returned;
+      entries[idx].variance.returnedTotal = summary.total;
       saveEntries(entries);
     }
-    signatureByFinding.set(ackId, {
-      finding_id: ackId,
-      staff_name: signedName,
-      signed_name: signedName,
-      signed_at: signedAt,
-      signature_data_url: signatureDataUrl
-    });
-    acknowledgmentByFinding.set(ackId, {
-      finding_id: ackId,
-      staff_name: signedName,
-      status: 'acknowledged',
-      comment,
-      signed_name: signedName,
-      signed_at: signedAt
-    });
-    if(status) status.textContent = 'Thank you. Your signed variance response was submitted.';
+    if(status) {
+      status.textContent = summary.allReturned
+        ? 'Thank you. Your signed variance response was submitted. All listed staff have returned.'
+        : `Thank you. Your signed variance response was submitted. ${summary.returned}/${summary.total} listed staff have returned.`;
+    }
     if(button) button.textContent = 'Submitted';
     await loadSharedAuditFindings();
   } catch(error) {
@@ -1694,12 +1803,22 @@ function patientCell(e){
 function mrnCell(e){
   return e.mrn || (e.sharedSummaryOnly ? protectedPhiLabel() : '—');
 }
-function varianceLabel(v){
+function varianceLabel(v, entry){
   const status = (v && v.status) || 'not_sent';
+  const summary = entryReturnSummary(entry);
+  const allReturned = summary.total > 1 && summary.allReturned;
+  const partialReturned = summary.total > 1 && summary.returned > 0 && !summary.allReturned;
+  const displayStatus = allReturned ? 'received' : (partialReturned ? 'sent' : status);
   const map = {not_sent:'Not sent', sent:'Awaiting return', received:'Returned', na:'N/A'};
-  const title = v && v.dateReceived ? ` title="Received ${v.dateReceived}"` : (v && v.dateSent ? ` title="Sent ${v.dateSent}"` : '');
-  const detail = v && v.dateReceived ? `<div class="returned-meta">${fmtDate(v.dateReceived)}${v.receivedAutomatically ? ' · employee signed' : ''}</div>` : '';
-  return `<span class="var-pill var-${status}"${title}>${map[status]}</span>${detail}`;
+  const label = partialReturned ? 'Partial return' : (allReturned ? 'Returned' : (map[displayStatus] || displayStatus));
+  const title = summary.latestDate ? ` title="Latest return ${summary.latestDate}"` : (v && v.dateSent ? ` title="Sent ${v.dateSent}"` : '');
+  let detail = '';
+  if(summary.total > 1 && summary.returned > 0){
+    detail = `<div class="returned-meta">${summary.returned}/${summary.total} signed${summary.pending.length ? ' · awaiting ' + escapeHtml(summary.pending.join(', ')) : ' · all listed staff signed'}</div>`;
+  } else if(v && v.dateReceived){
+    detail = `<div class="returned-meta">${fmtDate(v.dateReceived)}${v.receivedAutomatically ? ' · employee signed' : ''}</div>`;
+  }
+  return `<span class="var-pill var-${displayStatus}"${title}>${label}</span>${detail}`;
 }
 
 function renderTable(){
@@ -1725,15 +1844,15 @@ function renderTable(){
       <td data-label="Issue" class="issue-cell">${htmlWithLineBreaks(summarize(e))}</td>
       <td data-label="Staff">${staffChips(e.staff)}</td>
       <td data-label="Status"><span class="status-pill status-${e.status}">${e.status==='open'?'Open':'Closed'}</span></td>
-      <td data-label="Variance">${varianceLabel(e.variance)}</td>
+      <td data-label="Variance">${varianceLabel(e.variance, e)}</td>
       <td data-label="Actions" class="row-actions actions-cell">
         <button onclick="editEntry('${e.id}')">Edit</button>
-        <button onclick="sendVariance('${e.id}')" title="Open the variance email with a response link. Use Mark Sent after sending.">Open Email</button>
+        <button onclick="sendVariance('${e.id}')" title="Copy or show the variance response link. Use Mark Sent after sharing it.">Copy Link</button>
         <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the source Smartsheet and copy row lookup details">Smartsheet</button>
         ${(!e.variance || e.variance.status==='not_sent') ? `<button onclick="markVarianceSent('${e.id}')" title="Confirm the variance was actually sent">Mark Sent</button>` : ''}
-        ${(e.variance && e.variance.status==='sent') ? `<button onclick="receiveVariance('${e.id}')" title="Mark variance form as returned by staff">Mark Received</button>` : ''}
+        ${varianceCanMarkReceived(e) ? `<button onclick="receiveVariance('${e.id}')" title="Mark one staff variance form as returned">Mark Received</button>` : ''}
         ${(e.variance && ['sent','received'].includes(e.variance.status)) ? `<button onclick="resetVarianceStatus('${e.id}')" title="Correct the variance status back to not sent">Reset Status</button>` : ''}
-        ${(e.variance && e.variance.status==='received') ? `<button onclick="printReturnedForm('${e.id}')" title="View and print this returned form">Print Form</button>` : ''}
+        ${hasReturnedForms(e) ? `<button onclick="printReturnedForm('${e.id}')" title="View and print returned form(s)">Print Form</button>` : ''}
         <button onclick="deleteEntry('${e.id}')">Delete</button>
       </td>
     </tr>
@@ -1755,31 +1874,38 @@ function setLineSearch(value){
 }
 
 function returnedEntries(){
-  return visibleEntries().filter(e=>e.variance && e.variance.status==='received')
-    .sort((a,b)=>String(b.variance.dateReceived || b.date || '').localeCompare(String(a.variance.dateReceived || a.date || '')));
+  return visibleEntries().flatMap(returnedRecordsForEntry)
+    .sort((a,b)=>{
+      const aDate = (a.ack && a.ack.signed_at) || (a.entry.variance && a.entry.variance.dateReceived) || a.entry.date || '';
+      const bDate = (b.ack && b.ack.signed_at) || (b.entry.variance && b.entry.variance.dateReceived) || b.entry.date || '';
+      return String(bDate).localeCompare(String(aDate));
+    });
 }
 
 function renderReturnedForms(){
   const wrap = document.getElementById('returnedWrap');
-  const entries = returnedEntries();
-  if(!entries.length){
+  const records = returnedEntries();
+  if(!records.length){
     wrap.innerHTML = '<div class="empty">No returned variance forms yet.</div>';
     return;
   }
-  wrap.innerHTML = `<table><thead><tr><th>Returned</th><th>Employee</th><th>Audit date</th><th>Type</th><th>Response</th><th></th></tr></thead><tbody>${entries.map(e=>{
-    const ack = acknowledgmentByFinding.get(e.id);
-    const employee = (ack && (ack.signed_name || ack.staff_name)) || (e.staff || []).join(', ') || '—';
-    const response = ack && ack.comment ? ack.comment : (e.variance.receivedAutomatically ? 'Signed acknowledgment received' : 'Returned outside the online acknowledgment link');
-    return `<tr><td>${fmtDate(e.variance.dateReceived)}</td><td>${escapeHtml(employee)}</td><td>${fmtDate(e.date)}</td><td><span class="type-pill">${escapeHtml(AUDIT_TYPES[e.type]?.short || e.type)}</span></td><td>${escapeHtml(response)}</td><td class="row-actions"><button onclick="printReturnedForm('${e.id}')">View / Print</button></td></tr>`;
+  wrap.innerHTML = `<table><thead><tr><th>Returned</th><th>Employee</th><th>Audit date</th><th>Type</th><th>Response</th><th></th></tr></thead><tbody>${records.map(record=>{
+    const e = record.entry;
+    const ack = record.ack;
+    const employee = (ack && (ack.signed_name || ack.staff_name)) || record.staffName || (e.staff || []).join(', ') || '—';
+    const returnedDate = ack && ack.signed_at ? String(ack.signed_at).slice(0,10) : (e.variance && e.variance.dateReceived);
+    const response = ack && ack.comment ? ack.comment : (e.variance && e.variance.receivedAutomatically ? 'Signed acknowledgment received' : 'Returned outside the online acknowledgment link');
+    return `<tr><td>${fmtDate(returnedDate)}</td><td>${escapeHtml(employee)}</td><td>${fmtDate(e.date)}</td><td><span class="type-pill">${escapeHtml(AUDIT_TYPES[e.type]?.short || e.type)}</span></td><td>${escapeHtml(response)}</td><td class="row-actions"><button onclick="printReturnedForm(${JSON.stringify(e.id)}, ${JSON.stringify(record.staffKey)})">View / Print</button></td></tr>`;
   }).join('')}</tbody></table>`;
 }
 
-function variancePrintSection(e){
-  const ack = acknowledgmentByFinding.get(e.id);
+function variancePrintSection(e, ackOverride){
+  const ack = ackOverride || acknowledgmentByFinding.get(e.id);
   const employee = (ack && (ack.signed_name || ack.staff_name)) || (e.staff || []).join(', ') || '—';
   const response = ack && ack.comment ? ack.comment : (e.variance && e.variance.receivedAutomatically ? 'Employee signed the online acknowledgment.' : 'Variance form was manually marked as returned.');
   const signedAt = ack && ack.signed_at ? new Date(ack.signed_at).toLocaleString('en-US') : fmtDate(e.variance && e.variance.dateReceived);
-  const signature = signatureByFinding.get(e.id) || {};
+  const staffKey = ack ? acknowledgmentStaffKey(e.id, rowStaffName(ack)) : '';
+  const signature = (staffKey && signatureByFindingStaff.get(staffKey)) || signatureByFinding.get(e.id) || {};
   const signatureImg = signature.signature_data_url
     ? `<img src="${signature.signature_data_url}" alt="Employee drawn signature" style="max-width:280px;max-height:95px;display:block;margin-top:6px;">`
     : '<span>Drawn electronic signature required on submission.</span>';
@@ -1792,7 +1918,7 @@ function variancePrintSection(e){
       <div><b>Audit type</b><span>${escapeHtml(AUDIT_TYPES[e.type]?.label || e.type)}</span></div>
       <div><b>Audit date</b><span>${escapeHtml(fmtDate(e.date))}</span></div>
       <div><b>Audit line #</b><span>${escapeHtml(e.auditLineNumber || '—')}</span></div>
-      <div><b>Date returned</b><span>${escapeHtml(fmtDate(e.variance && e.variance.dateReceived))}</span></div>
+      <div><b>Date returned</b><span>${escapeHtml(signedAt || '—')}</span></div>
       <div><b>Unit</b><span>${escapeHtml(e.unit || '3B/3C')}</span></div>
       <div><b>Follow-up status</b><span>${escapeHtml(e.status==='closed' ? 'Closed' : 'Open')}</span></div>
       <div><b>Audit record ID</b><span>${escapeHtml(e.id || '—')}</span></div>
@@ -1816,21 +1942,26 @@ function openPrintWindow(forms, title){
   popup.document.close();
 }
 
-function printReturnedForm(id){
+function printReturnedForm(id, staffKey){
   const e = loadEntries().find(x=>x.id===id);
   if(!e) return;
-  openPrintWindow(variancePrintSection(e), `Returned Variance - ${(e.staff || []).join(', ') || fmtDate(e.date)}`);
+  const records = returnedRecordsForEntry(e);
+  const record = (staffKey && records.find(r=>r.staffKey===staffKey)) || records[0] || { entry:e, ack:null };
+  const employee = (record.ack && (record.ack.signed_name || record.ack.staff_name)) || record.staffName || (e.staff || []).join(', ') || fmtDate(e.date);
+  openPrintWindow(variancePrintSection(e, record.ack), `Returned Variance - ${employee}`);
 }
 
 function printAllReturned(){
-  const entries = returnedEntries();
-  if(!entries.length){ alert('There are no returned forms to print.'); return; }
-  openPrintWindow(entries.map(variancePrintSection).join(''), 'Returned Variance Forms');
+  const records = returnedEntries();
+  if(!records.length){ alert('There are no returned forms to print.'); return; }
+  openPrintWindow(records.map(record => variancePrintSection(record.entry, record.ack)).join(''), 'Returned Variance Forms');
 }
 
 function showReturnedForms(){
-  const ids = returnedEntries().filter(e=>e.variance.receivedAutomatically).map(e=>e.id);
-  localStorage.setItem('audit_seen_returns_v1', JSON.stringify(ids));
+  const keys = returnedEntries()
+    .filter(record=>record.entry.variance && record.entry.variance.receivedAutomatically)
+    .map(record=>record.staffKey || record.entry.id);
+  localStorage.setItem('audit_seen_returns_v1', JSON.stringify(keys));
   renderStats();
   document.getElementById('returnedPanel').scrollIntoView({behavior:'smooth',block:'start'});
 }
@@ -1844,11 +1975,11 @@ function renderStats(){
   document.getElementById('statClosed').textContent = entries.filter(e=>e.status==='closed').length;
   document.getElementById('statVariance').textContent = entries.filter(e=>!e.variance || e.variance.status==='not_sent').length;
   document.getElementById('statAwaiting').textContent = entries.filter(e=>e.variance && e.variance.status==='sent').length;
-  document.getElementById('statReturned').textContent = entries.filter(e=>e.variance && e.variance.status==='received').length;
+  document.getElementById('statReturned').textContent = entries.reduce((count, entry) => count + returnedRecordsForEntry(entry).length, 0);
 
-  const autoReturns = entries.filter(e=>e.variance && e.variance.status==='received' && e.variance.receivedAutomatically);
+  const autoReturns = entries.flatMap(returnedRecordsForEntry).filter(record=>record.entry.variance && record.entry.variance.receivedAutomatically);
   const seen = new Set(JSON.parse(localStorage.getItem('audit_seen_returns_v1') || '[]'));
-  const unseen = autoReturns.filter(e=>!seen.has(e.id));
+  const unseen = autoReturns.filter(record=>!seen.has(record.staffKey || record.entry.id));
   const alertBox = document.getElementById('returnAlert');
   document.getElementById('returnAlertText').textContent = unseen.length
     ? `${unseen.length} new employee variance ${unseen.length===1?'form has':'forms have'} been returned and signed.`
@@ -2232,45 +2363,19 @@ function emailRecipients(value){
 async function sendVariance(id){
   const e = loadEntries().find(x=>x.id===id);
   if(!e) return;
-  await refreshCcDirectoryEmails();
-  const staffEmails = (e.staff || [])
-    .map(name=>getCcDirectoryEmail(name))
-    .filter(Boolean);
-  const suggestedEmails = emailRecipients(e.suggestedCC);
-  const configuredEmails = emailRecipients(loadCC());
-  const toEmails = staffEmails.length ? staffEmails : (suggestedEmails.length ? suggestedEmails : configuredEmails);
-  const toSet = new Set(toEmails.map(email=>email.toLocaleLowerCase()));
-  const ccEmails = staffEmails.length
-    ? [...new Set([...suggestedEmails, ...configuredEmails].filter(email=>!toSet.has(email.toLocaleLowerCase())))]
-    : [];
-  if(!toEmails.length){
-    alert('This audit has no email recipient. Add a staff member from the CC directory to the audit, or add an email address in Settings.');
-    return;
-  }
-  const subject = `Variance Form Needed — ${AUDIT_TYPES[e.type]?.label || e.type}${e.patient ? ' — ' + e.patient : ''}${e.mrn ? ' (MR# ' + e.mrn + ')' : ''}`;
-  const responseLink = acknowledgmentUrl(e.id);
-  const coaching = coachingDisplayForEntry(e);
-  const bodyLines = [
-    `Audit type: ${AUDIT_TYPES[e.type]?.label || e.type}`,
-    `Date: ${fmtDate(e.date)}`,
-    e.auditLineNumber ? `Audit line #: ${e.auditLineNumber}` : null,
-    e.patient ? `Patient: ${e.patient}` : null,
-    e.mrn ? `MR#: ${e.mrn}` : null,
-    e.context ? `Context: ${e.context}` : null,
-    e.staff && e.staff.length ? `Staff involved: ${e.staff.join(', ')}` : null,
-    `Issue: ${formatCommaSeparatedIssueText(e.issue || 'See attached audit notification.')}`,
-    coaching ? `Coaching expectations:\n${coaching}` : null,
-    '',
-    'Please complete the variance response/signature link below for this non-compliance finding.',
-    '',
-    'Open variance response link:',
-    responseLink
-  ].filter(Boolean).join('\n');
-
-  const ccParameter = ccEmails.length ? `&cc=${encodeURIComponent(ccEmails.join(','))}` : '';
-  const mailto = `mailto:${encodeURIComponent(toEmails.join(','))}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines)}${ccParameter}`;
+  const staffNames = entryRequiredStaff(e);
+  const linkText = staffNames.length > 1
+    ? staffNames.map(name => `${name}: ${acknowledgmentUrl(e.id, name)}`).join('\n')
+    : acknowledgmentUrl(e.id);
   createAcknowledgmentRequests(e);
-  window.location.href = mailto;
+  try {
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(linkText);
+      alert(staffNames.length > 1 ? 'Variance response links copied. Each listed staff member has their own link.' : 'Variance response link copied.');
+      return;
+    }
+  } catch(error) { /* fall through to prompt */ }
+  prompt(staffNames.length > 1 ? 'Copy these variance response links:' : 'Copy this variance response link:', linkText);
 }
 
 // ---------- explicitly mark variance form sent ----------
@@ -2301,16 +2406,54 @@ function resetVarianceStatus(id){
 }
 
 // ---------- mark variance form received ----------
-function receiveVariance(id){
+async function receiveVariance(id){
   let entries = loadEntries();
   const idx = entries.findIndex(x=>x.id===id);
   if(idx<0) return;
   const e = entries[idx];
+  const summaryBefore = entryReturnSummary(e);
+  const pending = summaryBefore.pending.length ? summaryBefore.pending : entryRequiredStaff(e);
+  let staffName = '';
+  if(pending.length > 1){
+    staffName = prompt('Which staff member returned this variance?\n\nPending: ' + pending.join(', '), pending[0]) || '';
+    if(!staffName.trim()) return;
+  } else {
+    staffName = pending[0] || (e.staff || [])[0] || '';
+  }
   const dateReceived = prompt('Date variance form was returned (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
-  if(dateReceived===null) return; // cancelled
+  if(dateReceived===null) return;
+  const dateValue = dateReceived.trim() || new Date().toISOString().slice(0,10);
+  const signedAt = dateValue + 'T12:00:00.000Z';
+  const ackRow = {
+    finding_id: id,
+    staff_name: staffName || 'Manually returned',
+    status: 'acknowledged',
+    comment: 'Returned form marked received by leadership.',
+    signed_name: staffName || 'Manually returned',
+    signed_at: signedAt
+  };
+  try {
+    await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
+      method: 'POST',
+      headers: { apikey: AUDIT_SB_CONFIG.key, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(ackRow)
+    });
+  } catch(error) { /* local status still updates */ }
+
+  const staffKey = acknowledgmentStaffKey(id, ackRow.signed_name);
+  acknowledgmentByFinding.set(id, ackRow);
+  if(staffKey) acknowledgmentByFindingStaff.set(staffKey, ackRow);
+  const rows = (acknowledgmentRowsByFinding.get(id) || []).filter(row => acknowledgmentStaffKey(id, rowStaffName(row)) !== staffKey);
+  rows.unshift(ackRow);
+  acknowledgmentRowsByFinding.set(id, rows);
+
+  const summary = entryReturnSummary(e);
   entries[idx].variance = entries[idx].variance || {};
-  entries[idx].variance.status = 'received';
-  entries[idx].variance.dateReceived = dateReceived.trim() || new Date().toISOString().slice(0,10);
+  entries[idx].variance.status = summary.allReturned ? 'received' : 'sent';
+  entries[idx].variance.dateReceived = dateValue;
+  entries[idx].variance.receivedAutomatically = true;
+  entries[idx].variance.returnedCount = summary.returned;
+  entries[idx].variance.returnedTotal = summary.total;
   saveEntries(entries);
   pushAuditFinding(entries[idx]);
   renderAll();
