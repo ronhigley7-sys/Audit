@@ -948,6 +948,48 @@ function pickImportValue(row, keys){
   return '';
 }
 
+function isProtectedOrBlankPhi(value){
+  const text = String(value || '').trim();
+  if(!text) return true;
+  const compact = text.toLowerCase().replace(/\s+/g, '');
+  return compact === 'protected' || compact === 'redacted' || compact === 'masked' || compact === 'hidden' || compact === '-' || compact === '—' || compact === 'n/a' || compact === 'na';
+}
+
+function cleanPhiValue(value){
+  const text = String(value || '').trim();
+  return isProtectedOrBlankPhi(text) ? '' : text;
+}
+
+function pickPhiImportValue(row, keys){
+  for(const key of keys){
+    const value = cleanPhiValue(row[normKey(key)]);
+    if(value) return value;
+  }
+  return '';
+}
+
+function extractMrnCandidate(value){
+  const text = cleanPhiValue(value);
+  if(!text) return '';
+  const matches = text.match(/\b\d{5,12}\b/g);
+  return matches && matches.length ? matches.sort((a,b)=>b.length-a.length)[0] : '';
+}
+
+function pickMrnImportValue(row){
+  const direct = pickPhiImportValue(row, [
+    'MRN','MRN #','MR #','MR#','MR','MR Number','MR Num','MRN Number',
+    'Medical Record Number','Medical Record #','Medical Record','Medical Record No',
+    'Patient MRN','Patient MR #','Patient MR#','Patient ID','Patient Identifier',
+    'Patient Account Number','Account Number'
+  ]);
+  if(direct) return direct;
+  const combined = pickPhiImportValue(row, [
+    'Primary Column','Primary','Patient','Patient Name','Patient / MRN','Patient MRN',
+    'Patient Information','Patient Info','Name / MRN'
+  ]);
+  return extractMrnCandidate(combined);
+}
+
 function splitImportList(value, splitCommas){
   return String(value || '')
     .split(splitCommas ? /[,;\n]+/ : /[;\n]+/)
@@ -1036,8 +1078,8 @@ function entryFromImportRow(row){
   const unitText = pickImportValue(row, ['Unit','Nursing Unit','Unit Name','Floor','Location','Department','Area']);
   const context = pickImportValue(row, ['Context','Shift','Room','Visit','Visit Number','Patient Room']) || unitText;
   const issue = pickImportValue(row, ['Issue','Issues','Comments','Comment','Notes','Finding','Shared Finding','Audit Finding','Description','Details','Variance','Variance Details','Details of Variance','Deficiency','What Was Missed','Reason Missed']);
-  const patient = pickImportValue(row, ['Patient','Patient Name','Patient Initials','Initials']);
-  const mrn = pickImportValue(row, ['MRN','MR#','MR','Medical Record Number','Medical Record #']);
+  const patient = pickPhiImportValue(row, ['Patient','Patient Name','Patient Initials','Initials','Patient / MRN','Patient Information','Patient Info']);
+  const mrn = pickMrnImportValue(row);
   const statusText = pickImportValue(row, ['Status','Follow Up Status','Follow-Up Status']).toLowerCase();
   const status = (statusText.includes('closed') || statusText.includes('complete')) ? 'closed' : 'open';
   const staff = splitImportList(pickImportValue(row, ['Staff','Staff Name','Staff Names','Employee','Employees','Employee Involved','Staff Involved','Nurse','RN','CA','Tech']), false);
@@ -1046,9 +1088,9 @@ function entryFromImportRow(row){
   const unit = inferUnitFromText(unitText || context);
   const sourceId = pickImportValue(row, ['Row ID','RowID','Smartsheet Row ID','Smartsheet Row Number','Source ID','ID']);
   const auditLineNumber = pickImportValue(row, ['Audit Line Number','Audit Line #','Line Number','Line #','Audit Line','Audit #','Record Number']);
-  const idSeed = sourceId || [type,date,unit,patient,mrn,issue,tags.join('|')].join('|');
+  const idSeed = sourceId || [type,date,unit,auditLineNumber || patient,mrn,issue,tags.join('|')].join('|');
   return {
-    id: sourceId ? `ss_${simpleHash(sourceId)}` : `import_${type}_${date}_${simpleHash(idSeed)}`,
+    id: sourceId ? `ss_${simpleHash(sourceId)}` : (auditLineNumber ? `import_${type}_${date}_${simpleHash([unit,auditLineNumber].join('|'))}` : `import_${type}_${date}_${simpleHash(idSeed)}`),
     type,
     date,
     status,
@@ -1067,6 +1109,43 @@ function entryFromImportRow(row){
   };
 }
 
+function auditLineFingerprint(entry){
+  const line = String(entry && entry.auditLineNumber || '').trim().toLowerCase();
+  if(!line) return '';
+  return [
+    normalizeAuditType(entry.type || 'chart'),
+    String(entry.date || '').slice(0,10),
+    inferUnitFromText(entry.unit || entry.context || ''),
+    line
+  ].join('|');
+}
+
+function choosePhiValue(existingValue, incomingValue){
+  const incoming = cleanPhiValue(incomingValue);
+  if(incoming) return incoming;
+  const existing = cleanPhiValue(existingValue);
+  return existing;
+}
+
+function mergeImportedEntry(existing, imported){
+  if(!existing) return imported;
+  const existingVariance = existing.variance || {};
+  const importedVariance = imported.variance || {};
+  const preserveVariance = existingVariance.status && existingVariance.status !== 'not_sent';
+  return {
+    ...existing,
+    ...imported,
+    id: existing.id || imported.id,
+    patient: choosePhiValue(existing.patient, imported.patient),
+    mrn: choosePhiValue(existing.mrn, imported.mrn),
+    issue: imported.issue || existing.issue || '',
+    tags: imported.tags && imported.tags.length ? imported.tags : (existing.tags || []),
+    staff: imported.staff && imported.staff.length ? imported.staff : (existing.staff || []),
+    variance: preserveVariance ? {...importedVariance, ...existingVariance} : {...existingVariance, ...importedVariance},
+    sharedSummaryOnly: false
+  };
+}
+
 async function importAuditCsv(){
   const input = document.getElementById('auditImportFile');
   const statusEl = document.getElementById('auditImportStatus');
@@ -1081,17 +1160,33 @@ async function importAuditCsv(){
       alert('No audit rows with a usable date were found in that CSV.');
       return;
     }
-    const byId = new Map(loadEntries().map(entry => [entry.id, entry]));
-    imported.forEach(entry => byId.set(entry.id, {...(byId.get(entry.id) || {}), ...entry}));
+    const existingEntries = loadEntries();
+    const byId = new Map(existingEntries.map(entry => [entry.id, entry]));
+    const byFingerprint = new Map();
+    existingEntries.forEach(entry => {
+      const fp = auditLineFingerprint(entry);
+      if(fp && !byFingerprint.has(fp)) byFingerprint.set(fp, entry);
+    });
+    let phiCount = 0;
+    const mergedImported = [];
+    imported.forEach(entry => {
+      const fp = auditLineFingerprint(entry);
+      const existing = byId.get(entry.id) || (fp ? byFingerprint.get(fp) : null);
+      const merged = mergeImportedEntry(existing, entry);
+      if(merged.patient || merged.mrn) phiCount++;
+      byId.set(merged.id, merged);
+      if(fp) byFingerprint.set(fp, merged);
+      mergedImported.push(merged);
+    });
     saveEntries(Array.from(byId.values()));
     renderAll();
 
     let synced = 0;
-    for(const entry of imported){
+    for(const entry of mergedImported){
       if(await pushAuditFinding(entry)) synced++;
     }
     await loadSharedAuditFindings();
-    if(statusEl) statusEl.textContent = `Imported ${imported.length}; updated ${synced} shared audit summaries.`;
+    if(statusEl) statusEl.textContent = `Imported ${imported.length}; ${phiCount} row(s) loaded patient/MR# locally; updated ${synced} shared audit summaries.`;
     if(synced < imported.length){
       alert(`Imported ${imported.length} rows locally, but only ${synced} updated the shared audit list. Try Settings > Sync current entries to CC now after checking the connection.`);
     }
@@ -1795,13 +1890,15 @@ function staffChips(staff){
   return staff.map(s=>`<span class="staff-chip">${s}</span>`).join('');
 }
 function protectedPhiLabel(){
-  return '<span style="color:var(--muted);font-size:12px;" title="Patient identifiers are not stored in the shared public summary table.">Protected</span>';
+  return '<span style="color:var(--muted);font-size:12px;" title="Patient identifiers are not stored in the shared public summary table. Import the latest Smartsheet CSV on this work computer to show them locally.">Protected</span>';
 }
 function patientCell(e){
-  return e.patient || (e.sharedSummaryOnly ? protectedPhiLabel() : '—');
+  const patient = cleanPhiValue(e.patient);
+  return patient ? escapeHtml(patient) : (e.sharedSummaryOnly ? protectedPhiLabel() : '—');
 }
 function mrnCell(e){
-  return e.mrn || (e.sharedSummaryOnly ? protectedPhiLabel() : '—');
+  const mrn = cleanPhiValue(e.mrn);
+  return mrn ? escapeHtml(mrn) : (e.sharedSummaryOnly ? protectedPhiLabel() : '—');
 }
 function varianceLabel(v, entry){
   const status = (v && v.status) || 'not_sent';
