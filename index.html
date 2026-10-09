@@ -680,7 +680,7 @@ function entryFromAuditFinding(row){
   const tags = asArray(row.tags);
   const staff = asArray(row.staff_names);
   const label = tags.length
-    ? `${row.audit_type === 'pain' ? 'Why pain requirement was missed' : 'Specific variance'}: ${tags.join(', ')}`
+    ? formatCommaSeparatedIssueText(`${row.audit_type === 'pain' ? 'Why pain requirement was missed' : 'Specific variance'}: ${tags.join(', ')}`)
     : (row.audit_type === 'pain' ? 'Reason not recorded in Smartsheet' : 'Specific variance not recorded in Smartsheet');
   return {
     id: row.id,
@@ -1535,10 +1535,33 @@ function renderSmartsheetSourceButtons(){
 }
 
 // ---------- main render ----------
+
+function formatCommaSeparatedIssueText(value){
+  const text = String(value || '').replace(/\r\n/g, '\n').trim();
+  if(!text || text.includes('\n')) return text;
+  if(!text.includes(',')) return text;
+  const firstComma = text.indexOf(',');
+  const prefixMatch = text.slice(0, firstComma).match(/^([^:]{1,80}:)\s*(.*)$/);
+  let prefix = '';
+  let body = text;
+  if(prefixMatch){
+    prefix = prefixMatch[1];
+    body = (prefixMatch[2] ? prefixMatch[2] + text.slice(firstComma) : text.slice(firstComma + 1)).trim();
+  }
+  const parts = body.split(',').map(part => part.trim()).filter(Boolean);
+  if(parts.length < 2) return text;
+  return (prefix ? prefix + '\n' : '') + parts.join('\n');
+}
+
+function htmlWithLineBreaks(value){
+  return escapeHtml(formatCommaSeparatedIssueText(value)).replace(/\n/g, '<br>');
+}
+
 function summarize(e){
-  if(e.type==='chart') return e.issue || 'Compliance issue noted';
-  if(e.type==='pain') return e.issue || '';
-  return e.issue || (e.context || '');
+  const issue = formatCommaSeparatedIssueText(e.issue || '');
+  if(e.type==='chart') return issue || 'Compliance issue noted';
+  if(e.type==='pain') return issue || '';
+  return issue || (e.context || '');
 }
 function staffChips(staff){
   if(!staff || staff.length===0) return '<span style="color:var(--muted)">—</span>';
@@ -1581,7 +1604,7 @@ function renderTable(){
       <td data-label="Type"><span class="type-pill">${AUDIT_TYPES[e.type]?.short || e.type}</span></td>
       <td data-label="Patient">${patientCell(e)}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${e.unit})</span>` : ''}</td>
       <td data-label="MR#" class="mrn">${mrnCell(e)}</td>
-      <td data-label="Issue" class="issue-cell">${summarize(e)}</td>
+      <td data-label="Issue" class="issue-cell">${htmlWithLineBreaks(summarize(e))}</td>
       <td data-label="Staff">${staffChips(e.staff)}</td>
       <td data-label="Status"><span class="status-pill status-${e.status}">${e.status==='open'?'Open':'Closed'}</span></td>
       <td data-label="Variance">${varianceLabel(e.variance)}</td>
@@ -1939,7 +1962,7 @@ function renderModalBody(entry){
     <div id="checklistWrap">${buildChecklistHTML(type, entry)}</div>
     <div class="field" style="margin-top:14px;">
       <label>${type==='chart' ? 'Issue noted' : 'Comments'}</label>
-      <textarea id="fIssue" placeholder="What the audit flagged">${entry?.issue || ''}</textarea>
+      <textarea id="fIssue" placeholder="What the audit flagged">${escapeHtml(formatCommaSeparatedIssueText(entry?.issue || ''))}</textarea>
     </div>
 
     <div class="section-label">Follow-up</div>
@@ -2019,7 +2042,7 @@ async function saveEntry(){
   });
   const over24h = document.getElementById('over24h')?.checked || false;
   const context = document.getElementById('fContext').value.trim();
-  const issue = document.getElementById('fIssue').value.trim();
+  const issue = formatCommaSeparatedIssueText(document.getElementById('fIssue').value.trim());
 
   const data = {
     type,
@@ -2108,7 +2131,7 @@ async function sendVariance(id){
     e.mrn ? `MR#: ${e.mrn}` : null,
     e.context ? `Context: ${e.context}` : null,
     e.staff && e.staff.length ? `Staff involved: ${e.staff.join(', ')}` : null,
-    `Issue: ${e.issue || 'See attached audit notification.'}`,
+    `Issue: ${formatCommaSeparatedIssueText(e.issue || 'See attached audit notification.')}`,
     '',
     'Please complete the variance response/signature link below for this non-compliance finding.',
     '',
