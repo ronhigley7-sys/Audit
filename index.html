@@ -363,6 +363,51 @@ const CHECKLISTS = {
   ]
 };
 
+const COACHING_DIRECTORY = [
+  {
+    key: 'pain-admission',
+    title: 'Pain Level on Admission',
+    aliases: ['pain level on admission', 'pain on admission', 'admission pain'],
+    coaching: 'Pain must be documented upon admission with a patient-specific pain goal, even when the patient denies pain.'
+  },
+  {
+    key: 'shift-assessment',
+    title: 'Complete Shift Assessment',
+    aliases: ['shift assessment', 'complete shift assessment', 'assessment every shift'],
+    coaching: 'A complete shift assessment must be documented on every patient every shift.'
+  },
+  {
+    key: 'pain-reassessment',
+    title: 'Pain Reassessment Time Frame',
+    aliases: ['pain level reassess', 'pain reassess', 'pain reassessment', 'reassessed within time frame', 'reassess pain medication', 'w i time frame', 'within time frame'],
+    coaching: 'Pain medication reassessment must be documented within 60 minutes for PO medication and within 30 minutes for IV medication.'
+  },
+  {
+    key: 'care-plan-interventions',
+    title: 'Care Plan Interventions',
+    aliases: ['missing interventions', 'general patient management cp', 'care plan interventions', 'care plans with interventions', 'interventions documented every shift'],
+    coaching: 'Patients must have 2 care plans with interventions documented every shift.'
+  },
+  {
+    key: 'pain-order-parameters',
+    title: 'Pain Medication Order Parameters',
+    aliases: ['pain score listed by provider', 'ordered pain score', 'provider pain score', 'pain number outside', 'outside the ordered score', 'ordered scores', 'pain medication order'],
+    coaching: 'Pain medication may only be given for the pain score range listed in the provider order. If the patient reports a pain number outside the ordered score range, contact the provider for a new order before administering.'
+  },
+  {
+    key: 'care-plan-initiation',
+    title: 'Care Plan Initiation',
+    aliases: ['care plan initiated', 'initiated within twelve hours', 'initiated within 12 hours', 'care plan within 12 hours', 'care plan initiation'],
+    coaching: 'Each patient must have a care plan initiated within 12 hours.'
+  },
+  {
+    key: 'behavioral-hold',
+    title: 'BERT / Hands-On Intervention',
+    aliases: ['bert', 'behavioral hold', 'hands on', 'hands-on', 'security', 'clinical staff', 'supporting that hold'],
+    coaching: 'If a BERT or behavioral event requires security or clinical staff to place hands on a patient, there must be a provider order and documentation supporting that hold.'
+  }
+];
+
 let currentTab = 'all';
 let editingId = null;
 let modalType = 'chart';
@@ -1080,7 +1125,8 @@ function acknowledgmentDetailsHtml(entry){
     ['Audit line #', entry.auditLineNumber || ''],
     ['Unit', entry.unit || ''],
     ['Staff involved', (entry.staff || []).join(', ')],
-    ['Issue', summarize(entry)]
+    ['Issue', summarize(entry)],
+    ['Coaching expectations', coachingDisplayForEntry(entry)]
   ].filter(([, value]) => String(value || '').trim()).map(([label, value]) => (
     '<div style="border-top:1px solid #2e3947;padding:10px 0;">' +
       '<b style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">' + escapeHtml(label) + '</b>' +
@@ -1557,6 +1603,78 @@ function htmlWithLineBreaks(value){
   return escapeHtml(formatCommaSeparatedIssueText(value)).replace(/\n/g, '<br>');
 }
 
+
+function issueTextWithoutCoaching(value){
+  const text = formatCommaSeparatedIssueText(value || '');
+  return text.replace(/\n\s*Coaching expectations:[\s\S]*$/i, '').trim();
+}
+
+function issueIncludesCoaching(value){
+  return /(^|\n)\s*Coaching expectations:/i.test(String(value || ''));
+}
+
+function normalizeCoachingNeedle(value){
+  return String(value || '')
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function coachingMatchesForIssue(issue, tags){
+  const tagText = Array.isArray(tags) ? tags.join(' ') : '';
+  const haystack = normalizeCoachingNeedle([issueTextWithoutCoaching(issue), tagText].join(' '));
+  if(!haystack) return [];
+  return COACHING_DIRECTORY.filter(item => item.aliases.some(alias => haystack.includes(normalizeCoachingNeedle(alias))));
+}
+
+function coachingDirectoryText(issue, tags){
+  const matches = coachingMatchesForIssue(issue, tags);
+  return matches.map(item => item.title + ': ' + item.coaching).join('\n');
+}
+
+function coachingDisplayForEntry(entry){
+  if(!entry || issueIncludesCoaching(entry.issue || '')) return '';
+  return coachingDirectoryText(entry.issue || '', entry.tags || []);
+}
+
+function addCoachingToIssue(){
+  const textarea = document.getElementById('fIssue');
+  if(!textarea) return;
+  const base = issueTextWithoutCoaching(textarea.value);
+  const coaching = coachingDirectoryText(base);
+  if(!coaching){
+    alert('No coaching match found for the current issue text. Use "View coaching directory" to copy the needed item manually.');
+    return;
+  }
+  textarea.value = (base ? base + '\n\n' : '') + 'Coaching expectations:\n' + coaching;
+  renderCoachingPreview();
+}
+
+function renderCoachingPreview(){
+  const box = document.getElementById('coachingPreview');
+  const textarea = document.getElementById('fIssue');
+  if(!box || !textarea) return;
+  const matches = coachingMatchesForIssue(textarea.value);
+  if(!matches.length){
+    box.innerHTML = '<span style="color:var(--muted);">No coaching match yet. Use the directory if this issue needs coaching text.</span>';
+    return;
+  }
+  box.innerHTML =
+    '<div style="font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--flag);margin-bottom:6px;">Matched coaching directory</div>' +
+    matches.map(item =>
+      '<div style="border-top:1px dashed var(--line);padding-top:7px;margin-top:7px;"><strong>' +
+      escapeHtml(item.title) +
+      '</strong><br><span>' +
+      escapeHtml(item.coaching) +
+      '</span></div>'
+    ).join('');
+}
+
+function showCoachingDirectory(){
+  alert(COACHING_DIRECTORY.map(item => item.title + ':\n' + item.coaching).join('\n\n'));
+}
+
 function summarize(e){
   const issue = formatCommaSeparatedIssueText(e.issue || '');
   if(e.type==='chart') return issue || 'Compliance issue noted';
@@ -1665,6 +1783,7 @@ function variancePrintSection(e){
   const signatureImg = signature.signature_data_url
     ? `<img src="${signature.signature_data_url}" alt="Employee drawn signature" style="max-width:280px;max-height:95px;display:block;margin-top:6px;">`
     : '<span>Drawn electronic signature required on submission.</span>';
+  const coaching = coachingDisplayForEntry(e);
   return `<section class="form">
     <div class="brand">ARNOT OGDEN MEDICAL CENTER · 3B/3C STROKE TELEMETRY</div>
     <h1>Returned Variance Form</h1>
@@ -1679,6 +1798,7 @@ function variancePrintSection(e){
       <div><b>Audit record ID</b><span>${escapeHtml(e.id || '—')}</span></div>
     </div>
     <h2>Finding</h2><p>${escapeHtml(summarize(e) || '—')}</p>
+    ${coaching ? `<h2>Coaching expectations</h2><p>${escapeHtml(coaching)}</p>` : ''}
     <h2>Employee response</h2><p>${escapeHtml(response)}</p>
     <div class="signature"><div><b>Printed name</b><span>${escapeHtml(employee)}</span></div><div><b>Signed / received</b><span>${escapeHtml(signedAt || '—')}</span></div></div>
     <div class="signature-image"><b>Employee drawn signature</b>${signatureImg}</div>
@@ -1962,7 +2082,12 @@ function renderModalBody(entry){
     <div id="checklistWrap">${buildChecklistHTML(type, entry)}</div>
     <div class="field" style="margin-top:14px;">
       <label>${type==='chart' ? 'Issue noted' : 'Comments'}</label>
-      <textarea id="fIssue" placeholder="What the audit flagged">${escapeHtml(formatCommaSeparatedIssueText(entry?.issue || ''))}</textarea>
+      <textarea id="fIssue" placeholder="What the audit flagged" oninput="renderCoachingPreview()">${escapeHtml(formatCommaSeparatedIssueText(entry?.issue || ''))}</textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button class="ghost small" type="button" onclick="addCoachingToIssue()">Add coaching for missed items</button>
+        <button class="ghost small" type="button" onclick="showCoachingDirectory()">View coaching directory</button>
+      </div>
+      <div id="coachingPreview" class="hint" style="margin-top:9px;background:rgba(232,184,64,.08);border:1px solid rgba(232,184,64,.22);border-radius:8px;padding:10px;line-height:1.4;"></div>
     </div>
 
     <div class="section-label">Follow-up</div>
@@ -2000,6 +2125,7 @@ function renderModalBody(entry){
   `;
   body.innerHTML = html;
   renderStaffChips();
+  renderCoachingPreview();
 }
 
 function onTypeChange(t){
@@ -2123,6 +2249,7 @@ async function sendVariance(id){
   }
   const subject = `Variance Form Needed — ${AUDIT_TYPES[e.type]?.label || e.type}${e.patient ? ' — ' + e.patient : ''}${e.mrn ? ' (MR# ' + e.mrn + ')' : ''}`;
   const responseLink = acknowledgmentUrl(e.id);
+  const coaching = coachingDisplayForEntry(e);
   const bodyLines = [
     `Audit type: ${AUDIT_TYPES[e.type]?.label || e.type}`,
     `Date: ${fmtDate(e.date)}`,
@@ -2132,6 +2259,7 @@ async function sendVariance(id){
     e.context ? `Context: ${e.context}` : null,
     e.staff && e.staff.length ? `Staff involved: ${e.staff.join(', ')}` : null,
     `Issue: ${formatCommaSeparatedIssueText(e.issue || 'See attached audit notification.')}`,
+    coaching ? `Coaching expectations:\n${coaching}` : null,
     '',
     'Please complete the variance response/signature link below for this non-compliance finding.',
     '',
