@@ -2050,7 +2050,56 @@ function renderCoachingPreview(){
 }
 
 function showCoachingDirectory(){
-  alert(COACHING_DIRECTORY.map(item => item.title + ':\n' + item.coaching).join('\n\n'));
+  let dialog = document.getElementById('coachingDirectoryDialog');
+  if(!dialog){
+    dialog = document.createElement('dialog');
+    dialog.id = 'coachingDirectoryDialog';
+    dialog.setAttribute('aria-labelledby', 'coachingDirectoryTitle');
+    dialog.style.cssText = 'background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;width:min(720px,90vw);max-height:85vh;padding:22px;box-sizing:border-box;';
+    dialog.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><h3 id="coachingDirectoryTitle">Coaching directory</h3><button type="button" id="closeCoachingDirectory">Close</button></div><p>Select any text to copy it, or use a Copy button.</p><div id="coachingDirectoryItems"></div><p id="coachingCopyStatus" role="status" aria-live="polite"></p>';
+    document.body.appendChild(dialog);
+    dialog.querySelector('#closeCoachingDirectory').onclick = () => dialog.close();
+  }
+  const items = dialog.querySelector('#coachingDirectoryItems');
+  items.replaceChildren();
+  function addCopyField(title, text, rows){
+    const section = document.createElement('section');
+    section.style.cssText = 'margin:16px 0;';
+    const label = document.createElement('label');
+    label.textContent = title;
+    const field = document.createElement('textarea');
+    field.id = 'coachingCopyField' + items.children.length;
+    label.htmlFor = field.id;
+    field.value = text;
+    field.readOnly = true;
+    field.rows = rows;
+    field.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin:8px 0;user-select:text;-webkit-user-select:text;cursor:text;resize:vertical;';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = title === 'Full coaching directory' ? 'Copy all coaching' : 'Copy coaching';
+    button.onclick = async () => {
+      const status = dialog.querySelector('#coachingCopyStatus');
+      let copied = false;
+      try{
+        if(navigator.clipboard && window.isSecureContext){
+          await navigator.clipboard.writeText(field.value);
+          copied = true;
+        }
+      }catch(error){}
+      if(!copied){
+        field.focus();
+        field.select();
+        try{ copied = document.execCommand('copy'); }catch(error){}
+      }
+      status.textContent = copied ? 'Coaching copied. Paste it where needed.' : 'Text selected. Press Ctrl+C (or Command+C) to copy.';
+    };
+    section.append(label, field, button);
+    items.appendChild(section);
+  }
+  addCopyField('Full coaching directory', COACHING_DIRECTORY.map(item => item.title + ':\n' + item.coaching).join('\n\n'), 8);
+  COACHING_DIRECTORY.forEach(item => addCopyField(item.title, item.title + ':\n' + item.coaching, 4));
+  dialog.querySelector('#coachingCopyStatus').textContent = '';
+  if(!dialog.open) dialog.showModal();
 }
 
 function summarize(e){
