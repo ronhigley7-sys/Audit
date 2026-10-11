@@ -203,9 +203,11 @@
         <select id="auditMonthFilter" aria-label="Filter audits by month" onchange="setAuditMonth(this.value)">
           <option value="">All audit months</option>
         </select>
-        <input class="line-search" id="lineSearch" type="search" placeholder="Find audit line #" oninput="setLineSearch(this.value)">
+        <input class="line-search" id="lineSearch" name="audit-line-number-search" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Find audit line number" placeholder="Find audit line # (not email)" oninput="setLineSearch(this.value)">
+        <button class="ghost small" type="button" onclick="clearAuditFilters()">Clear filters</button>
       </div>
     </div>
+    <div id="auditFilterSummary" class="hint" role="status" style="padding:10px 22px;"></div>
     <div id="tableWrap"></div>
   </div>
 
@@ -2365,15 +2367,22 @@ function varianceLabel(v, entry){
 }
 
 function renderTable(){
+  // Browsers may autofill an email into a search box; it is not an audit line.
+  const searchInput = document.getElementById('lineSearch');
+  if(auditLineSearch.includes('@') || (searchInput && searchInput.value.includes('@'))){
+    auditLineSearch = '';
+    if(searchInput) searchInput.value = '';
+  }
   const all = visibleEntries();
   const monthEntries = entriesForSelectedMonth(all);
   const tabEntries = currentTab==='all' ? monthEntries : monthEntries.filter(e=>e.type===currentTab);
   const entries = tabEntries.filter(e=>!auditLineSearch || String(e.auditLineNumber || '').toLowerCase().includes(auditLineSearch))
     .sort((a,b)=> (b.date||'').localeCompare(a.date||''));
   const wrap = document.getElementById('tableWrap');
+  document.getElementById('auditFilterSummary').textContent = `Showing ${entries.length} of ${all.length} unit audits` + (selectedAuditMonth ? ` · ${auditMonthLabel(selectedAuditMonth)}` : ' · all months') + (auditLineSearch ? ` · line # contains ${auditLineSearch}` : '');
 
   if(entries.length===0){
-    wrap.innerHTML = '<div class="empty">No entries in this view yet.</div>';
+    wrap.innerHTML = '<div class="empty">No audits match the selected filters. <button type="button" onclick="clearAuditFilters()">Clear filters</button></div>';
     return;
   }
 
@@ -2413,7 +2422,19 @@ function renderTable(){
 
 function setLineSearch(value){
   auditLineSearch = String(value || '').trim().toLowerCase();
+  if(auditLineSearch.includes('@')){
+    auditLineSearch = '';
+    document.getElementById('lineSearch').value = '';
+  }
   renderTable();
+}
+
+function clearAuditFilters(){
+  auditLineSearch = '';
+  selectedAuditMonth = '';
+  currentTab = 'all';
+  document.getElementById('lineSearch').value = '';
+  renderAll();
 }
 
 function returnedEntries(){
