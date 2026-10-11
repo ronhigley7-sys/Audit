@@ -153,6 +153,25 @@
   .checkbox-row{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:14px;}
   .checkbox-row input{width:auto;}
   .variance-box{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-top:4px;}
+
+  /* v2 workflow */
+  .overdue-badge{display:inline-block;background:var(--danger-dim);color:var(--danger);border:1px solid rgba(217,112,79,.5);padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:700;}
+  .repeat-badge{display:inline-block;background:var(--flag-dim);color:var(--flag);padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:700;}
+  .repeat-badge.hot{background:var(--danger-dim);color:var(--danger);}
+  .needs-toggle{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap;}
+  .needs-toggle input{width:auto;}
+  .bulkbar{display:none;align-items:center;gap:10px;padding:10px 20px;background:rgba(232,184,64,.08);border-bottom:1px solid var(--line);font-size:12.5px;flex-wrap:wrap;}
+  .unassigned{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:rgba(232,184,64,.1);border:1px solid rgba(232,184,64,.4);color:#f0d68a;border-radius:10px;padding:11px 16px;margin-bottom:14px;font-size:13px;}
+  .unassigned-list{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin:-6px 0 16px;overflow-x:auto;}
+  .trends-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;padding:18px 20px;}
+  .chart-card{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
+  .chart-card h3{margin:0 0 10px;font-family:var(--serif);font-size:14px;}
+  .chart-box{position:relative;height:260px;}
+  .undo-toast{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;background:var(--panel-2);border:1px solid #465262;color:var(--text);border-radius:8px;padding:10px 14px;z-index:6000;display:flex;gap:14px;align-items:center;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.4);}
+  .log-list{max-height:170px;overflow-y:auto;border:1px solid var(--line);border-radius:7px;padding:6px 10px;}
+  .log-row{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:4px 0;font-size:12px;border-bottom:1px dashed var(--line);}
+  .log-row:last-child{border-bottom:none;}
+  .notifications-table input[type=checkbox]{width:auto;}
 </style>
 </head>
 <body>
@@ -187,12 +206,15 @@
     <div class="stat variance"><div class="n" id="statVariance">0</div><div class="l">Variance not sent</div></div>
     <div class="stat awaiting"><div class="n" id="statAwaiting">0</div><div class="l">Awaiting return</div></div>
     <div class="stat returned"><div class="n" id="statReturned">0</div><div class="l">Returned</div></div>
+    <div class="stat variance"><div class="n" id="statOverdue">0</div><div class="l">Overdue</div></div>
   </div>
 
   <div class="return-alert" id="returnAlert">
     <span id="returnAlertText"></span>
     <button class="ghost small" onclick="showReturnedForms()">View returned forms</button>
   </div>
+
+  <div id="unassignedBanner"></div>
 
   <div class="tabs" id="tabs"></div>
 
@@ -203,9 +225,29 @@
         <select id="auditMonthFilter" aria-label="Filter audits by month" onchange="setAuditMonth(this.value)">
           <option value="">All audit months</option>
         </select>
+        <select id="staffFilter" aria-label="Filter by staff" onchange="setStaffFilter(this.value)">
+          <option value="">All staff</option>
+        </select>
+        <select id="statusFilter" aria-label="Filter by status" onchange="setStatusFilter(this.value)">
+          <option value="">Open + closed</option>
+          <option value="open">Open only</option>
+          <option value="closed">Closed only</option>
+        </select>
+        <select id="varianceFilter" aria-label="Filter by variance" onchange="setVarianceFilter(this.value)">
+          <option value="">All variance states</option>
+          <option value="not_sent">Not sent</option>
+          <option value="sent">Awaiting return</option>
+          <option value="overdue">Overdue</option>
+          <option value="received">Returned</option>
+          <option value="na">N/A</option>
+        </select>
+        <label class="needs-toggle"><input type="checkbox" id="needsActionToggle" onchange="setNeedsAction(this.checked)"> Needs action</label>
         <input class="line-search" id="lineSearch" type="search" placeholder="Find audit line #" oninput="setLineSearch(this.value)">
+        <button class="ghost small" onclick="exportFilteredCsv()">Export CSV</button>
+        <button class="ghost small" onclick="printMonthlyReport()">Monthly report</button>
       </div>
     </div>
+    <div id="bulkBar" class="bulkbar"></div>
     <div id="tableWrap"></div>
   </div>
 
@@ -215,6 +257,16 @@
       <div class="panel-tools"><button class="ghost small" onclick="printAllReturned()">Print all returned</button></div>
     </div>
     <div id="returnedWrap"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Trends</h2></div>
+    <div class="trends-grid" id="trendsWrap"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>By employee</h2><span class="hint" style="margin:0;">Follows the audit month filter above</span></div>
+    <div id="employeeWrap"></div>
   </div>
 
   <div class="panel">
@@ -267,13 +319,13 @@
       <div class="field">
         <label>Variance form — CC recipients</label>
         <input type="text" id="ccList" placeholder="name@arnothealth.org, name2@arnothealth.org">
-        <p class="hint">Comma-separated email addresses copied on variance messages. Staff selected on an audit are addressed directly from the CC directory; these recipients are used as a fallback when no staff email is available.</p>
+        <p class="hint">Comma-separated email addresses copied (CC) on every variance email. Staff are addressed directly using their emails from the CC directory.</p>
       </div>
       <div class="field">
         <label>Auto Smartsheet / CC sync</label>
         <p class="hint" style="margin-bottom:8px;">Pulls de-identified audit summaries from the Smartsheet sync table and sends tagged staff/status updates back so CC employee tracking works. Patient name, MR#, visit number, and full issue descriptions are not sent to CC by this page.</p>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button class="ghost small" onclick="syncAllAuditFindings()">Sync current entries to CC now</button>
+          <button class="ghost small" onclick="syncAllAuditFindings(true)">Re-sync all entries to CC now</button>
           <span id="auditSyncStatus" class="hint" style="margin:0;"></span>
         </div>
       </div>
@@ -302,6 +354,30 @@
         </div>
       </div>
       <div class="field">
+        <label>Shared history window</label>
+        <select id="lookbackSelect" onchange="setLookback(this.value)">
+          <option value="60">Last 60 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="180">Last 6 months</option>
+          <option value="365">Last 12 months</option>
+          <option value="1825">Last 5 years</option>
+        </select>
+        <p class="hint">How far back shared Smartsheet findings load into this page.</p>
+      </div>
+      <div class="field">
+        <label>Variance due after (days)</label>
+        <input type="number" id="dueDaysInput" min="1" max="60" value="7">
+        <p class="hint">Sets the due date when a variance is sent. Past due and not returned shows as Overdue. Click Save settings to apply.</p>
+      </div>
+      <div class="field">
+        <label>Recently deleted</label>
+        <div class="log-list" id="trashList"></div>
+      </div>
+      <div class="field">
+        <label>Activity log</label>
+        <div class="log-list" id="activityLogList"></div>
+      </div>
+      <div class="field">
         <label>Import latest Smartsheet export</label>
         <input type="file" id="auditImportFile" accept=".csv,text/csv">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
@@ -318,6 +394,7 @@
   </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
 const ENTRIES_KEY = 'auditEntries_v2';
 const DIRECTORY_KEY = 'auditEmployeeDirectory';
@@ -325,6 +402,12 @@ const CC_KEY = 'auditVarianceCC';
 const PHI_TRUST_KEY = 'auditPhiTrustedWorkComputer_v1';
 const PHI_PASSWORD_KEY = 'auditPhiPassword_v1';
 const PHI_UNLOCK_KEY = 'auditPhiUnlockedSession_v1';
+const LOOKBACK_KEY = 'auditLookbackDays_v1';
+const DUE_DAYS_KEY = 'auditVarianceDueDays_v1';
+const LOG_KEY = 'auditActivityLog_v1';
+const TRASH_KEY = 'auditTrash_v1';
+const SYNC_HASH_KEY = 'auditSyncedHashes_v1';
+const IGNORED_KEY = 'auditIgnoredUnassigned_v1';
 
 const AUDIT_TYPES = {
   chart: { label: 'Chart Audit', short: 'Chart' },
@@ -443,6 +526,13 @@ let _ackSignatureHasData = false;
 let _ackSignatureDrawing = false;
 let auditLineSearch = '';
 let selectedAuditMonth = '';
+let auditStaffFilter = '';
+let auditStatusFilter = '';
+let auditVarianceFilter = '';
+let needsActionOnly = false;
+let selectedIds = new Set();
+let unassignedShared = [];
+let unassignedOpen = false;
 
 // ---------- storage helpers ----------
 function loadEntries(){ try{ return JSON.parse(localStorage.getItem(ENTRIES_KEY)) || []; }catch(e){ return []; } }
@@ -629,7 +719,7 @@ const AUDIT_SB_CONFIG = {
   url: 'https://xnsdvdfceflmagfhpycw.supabase.co',
   key: 'sb_publishable_X3VPp9di5Ve-fw_uJJTUyQ_Ztzi6mds'
 };
-const SHARED_LOOKBACK_DAYS = 60;
+
 const SHARED_REFRESH_MS = 60000;
 let lastAuditSyncError = '';
 
@@ -693,7 +783,9 @@ function auditFindingPayload(e){
     staff_names: e.staff || [],
     tags: (e.tags && e.tags.length) ? e.tags : deriveAuditTags(e.type, e.items),
     variance_status: (e.variance && e.variance.status) || null,
-    audit_line_number: e.auditLineNumber || null
+    audit_line_number: e.auditLineNumber || null,
+    variance_sent_date: isoOrNull(e.variance && e.variance.dateSent),
+    variance_due_date: isoOrNull(e.variance && e.variance.dueDate)
   };
 }
 
@@ -711,6 +803,11 @@ async function pushAuditFinding(entry){
       body: JSON.stringify(auditFindingPayload(entry))
     });
     if(!r.ok) lastAuditSyncError = await r.text();
+    else {
+      const hashes = loadSyncHashes();
+      hashes[entry.id] = payloadHash(entry);
+      saveSyncHashes(hashes);
+    }
     return r.ok;
   } catch(e) {
     lastAuditSyncError = e.message || String(e);
@@ -767,8 +864,9 @@ function entryFromAuditFinding(row){
     staff,
     over24h: staff.length > 2,
     reporter: '',
-    variance: { status: row.variance_status || 'not_sent', dateSent: '', dateReceived: '' },
+    variance: { status: row.variance_status || 'not_sent', dateSent: row.variance_sent_date || '', dueDate: row.variance_due_date || '', dateReceived: '' },
     tags,
+    rowUrl: row.row_url || '',
     sharedSummaryOnly: true
   };
 }
@@ -789,9 +887,14 @@ function mergeSharedEntries(localEntries, sharedEntries){
         mrn: keepLocalDetails ? entry.mrn : shared.mrn,
         issue: keepLocalDetails ? (entry.issue || shared.issue) : shared.issue,
         variance: {
-          ...(keepLocalDetails ? (entry.variance || {}) : {}),
+          ...(entry.variance || {}),
+          ...(shared.variance && shared.variance.dateSent ? { dateSent: shared.variance.dateSent } : {}),
+          ...(shared.variance && shared.variance.dueDate ? { dueDate: shared.variance.dueDate } : {}),
           status: (shared.variance && shared.variance.status) || (entry.variance && entry.variance.status) || 'not_sent'
         },
+        coach: entry.coach,
+        manager: entry.manager,
+        rowUrl: shared.rowUrl || entry.rowUrl || '',
         tags: (keepLocalDetails && entry.tags && entry.tags.length) ? entry.tags : shared.tags,
         staff: (keepLocalDetails && entry.staff && entry.staff.length) ? entry.staff : shared.staff,
         sharedSummaryOnly: !keepLocalDetails || !!(entry.sharedSummaryOnly && !entry.patient && !entry.mrn)
@@ -805,14 +908,25 @@ function mergeSharedEntries(localEntries, sharedEntries){
 
 async function loadSharedAuditFindings(){
   try {
-    const cutoff = lookbackDate(SHARED_LOOKBACK_DAYS);
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast`, {
-      headers: { apikey: AUDIT_SB_CONFIG.key }
-    });
-    if(!r.ok) return;
-    const rows = await r.json();
+    const cutoff = lookbackDate(getLookbackDays());
+    const rows = [];
+    for(let offset = 0; offset < 10000; offset += 1000){
+      const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number,row_url,variance_sent_date,variance_due_date&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast,id.asc&limit=1000&offset=${offset}`, {
+        headers: { apikey: AUDIT_SB_CONFIG.key }
+      });
+      if(!r.ok) return;
+      const page = await r.json();
+      rows.push(...page);
+      if(page.length < 1000) break;
+    }
+    const ignoredIds = new Set(loadIgnoredUnassigned());
+    unassignedShared = rows
+      .filter(row => !String(row.unit || '').trim() && !ignoredIds.has(row.id))
+      .map(entryFromAuditFinding);
     const sharedEntries = rows.map(entryFromAuditFinding).filter(is3B3CUnit);
-    saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
+    const syncedHashes = loadSyncHashes();
+    sharedEntries.forEach(s => { syncedHashes[s.id] = payloadHash(s); });
+    saveSyncHashes(syncedHashes);    saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
     await loadAcknowledgmentReturns(false);
     renderAll();
   } catch(e) { /* local entries still work if shared table is unavailable */ }
@@ -824,7 +938,7 @@ async function loadSharedAuditFindings(){
 async function loadAcknowledgmentReturns(renderAfter){
   try {
     const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - SHARED_LOOKBACK_DAYS);
+    cutoff.setDate(cutoff.getDate() - getLookbackDays());
     const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=id,finding_id,staff_name,status,comment,signed_name,signed_at,requested_at&status=eq.acknowledged&signed_at=gte.${encodeURIComponent(cutoff.toISOString())}&order=signed_at.desc.nullslast`, {
       headers: { apikey: AUDIT_SB_CONFIG.key }
     });
@@ -861,6 +975,11 @@ async function loadAcknowledgmentReturns(renderAfter){
       if(entry.variance.returnedCount !== summary.returned || entry.variance.returnedTotal !== summary.total) {
         entry.variance.returnedCount = summary.returned;
         entry.variance.returnedTotal = summary.total;
+        changed = true;
+      }
+      if(maybeAutoClose(entry)) {
+        logActivity('auto_closed', entry, 'variance returned + manager follow-up');
+        pushAuditFinding(entry);
         changed = true;
       }
     });
@@ -902,9 +1021,11 @@ function showTemporaryStatus(message){
   node._timer = setTimeout(()=>node.remove(), 2600);
 }
 
-async function syncAllAuditFindings(){
+async function syncAllAuditFindings(force){
   const statusEl = document.getElementById('auditSyncStatus');
-  const entries = visibleEntries();
+  const hashes = loadSyncHashes();
+  const entries = visibleEntries().filter(e => force === true || hashes[e.id] !== payloadHash(e));
+  if (!entries.length) { if (statusEl) statusEl.textContent = 'Everything already synced.'; return 0; }
   if (statusEl) statusEl.textContent = `Syncing 0 / ${entries.length}...`;
   let ok = 0;
   for (let i = 0; i < entries.length; i++) {
@@ -1371,7 +1492,7 @@ async function importAuditCsv(){
 }
 
 // ---------- employee acknowledgment / sign-off ----------
-const AUDIT_TYPE_LABELS = { chart:'Chart Audit', sitter:'Sitter Audit', behavioral:'Behavioral Health Audit', pain:'Pain Reassessment Audit' };
+
 
 function auditBaseUrl(){
   if(/^https?:$/i.test(window.location.protocol)){
@@ -1488,7 +1609,7 @@ async function fetchAcknowledgmentEntry(ackId){
   const local = loadEntries().find(entry => entry.id === ackId);
   if(local) return local;
   try {
-    const url = `${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&id=eq.${encodeURIComponent(ackId)}&limit=1`;
+    const url = `${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number,row_url,variance_sent_date,variance_due_date&id=eq.${encodeURIComponent(ackId)}&limit=1`;
     const response = await fetch(url, { headers: { apikey: AUDIT_SB_CONFIG.key } });
     if(!response.ok) return null;
     const rows = await response.json();
@@ -1515,22 +1636,20 @@ function acknowledgmentDetailsHtml(entry){
   )).join('');
 }
 
-async function sendAcknowledgment(id){
-  const url = acknowledgmentUrl(id);
-  try {
-    if(navigator.clipboard && navigator.clipboard.writeText){
-      await navigator.clipboard.writeText(url);
-      alert('Variance response link copied. Paste it into the staff email if needed.');
-      return;
-    }
-  } catch(error) { /* fall through to prompt */ }
-  prompt('Copy this variance response link:', url);
-}
-
+// Idempotent: only creates a pending row for staff who do not already have one.
 async function createAcknowledgmentRequests(entry){
-  const staffNames = entry && entry.staff && entry.staff.length ? entry.staff : [''];
+  if(!entry || !entry.id) return;
+  const staffNames = entry.staff && entry.staff.length ? entry.staff : [''];
+  let existing = [];
   try {
-    await Promise.all(staffNames.map(staffName => fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=staff_name&finding_id=eq.${encodeURIComponent(entry.id)}`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key }
+    });
+    if(r.ok) existing = (await r.json()).map(row => staffNameKey(row.staff_name));
+  } catch(error) { /* fall through and try to create */ }
+  const toCreate = staffNames.filter(name => !existing.includes(staffNameKey(name || 'Unspecified employee')));
+  try {
+    await Promise.all(toCreate.map(staffName => fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
       method: 'POST',
       headers: {
         apikey: AUDIT_SB_CONFIG.key,
@@ -1546,7 +1665,6 @@ async function createAcknowledgmentRequests(entry){
     })));
   } catch(error) { /* email still opens even if request tracking fails */ }
 }
-
 
 function parseAuditSignaturePayload(value){
   if(!value) return null;
@@ -1823,45 +1941,6 @@ function fmtDate(d){
   return dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 }
 
-// ---------- seed data (from Smartsheet screenshots) ----------
-function seedIfMissing(){
-  let entries = loadEntries();
-  const existingIds = new Set(entries.map(e=>e.id));
-  const seeds = [];
-  let added = false;
-  seeds.forEach(s=>{
-    if(!existingIds.has(s.id)){ entries.push(s); added = true; }
-  });
-  if(added) saveEntries(entries);
-
-  // seed employee directory
-  let dir = loadDirectory();
-  [].forEach(n=>{
-    if(!dir.includes(n)) dir.push(n);
-  });
-  saveDirectory(dir);
-}
-
-// ---------- real Smartsheet data (pulled via Smartsheet connector, NPI Chart Audits sheet) ----------
-// tags are the sheet's own AD/CP/Pain Non-Compliance Reason picklist values — used for "missing most" analytics.
-const REAL_CHART_DATA = {};
-
-function applyRealChartData(){
-  let entries = loadEntries();
-  let changed = false;
-  entries.forEach(e=>{
-    const real = REAL_CHART_DATA[e.id];
-    if(!real) return;
-    e.unit = real.unit;
-    e.tags = real.tags;
-    e.issue = real.issue;
-    e.suggestedCC = real.suggestedCC;
-    if(real.staff && (!e.staff || e.staff.length===0)) e.staff = real.staff;
-    changed = true;
-  });
-  if(changed) saveEntries(entries);
-}
-
 // ---------- tabs ----------
 function renderTabs(){
   const allEntries = visibleEntries();
@@ -1903,9 +1982,9 @@ function smartsheetRowIdFromEntry(e){
   return match ? match[1] : '';
 }
 function smartsheetRowUrl(e, source){
-  // Smartsheet mobile rejects constructed row-id URLs. Use the source sheet
-  // until the sync can provide Smartsheet's own row permalink.
-  return smartsheetOpenUrl(source);
+  // Smartsheet mobile rejects constructed row-id URLs, so only use the
+  // permalink Smartsheet itself provides (stored by the sync). Otherwise open the sheet.
+  return (e && e.rowUrl) ? e.rowUrl : smartsheetOpenUrl(source);
 }
 function smartsheetLookupText(e, source){
   const rowId = smartsheetRowIdFromEntry(e);
@@ -2061,7 +2140,7 @@ function summarize(e){
 }
 function staffChips(staff){
   if(!staff || staff.length===0) return '<span style="color:var(--muted)">—</span>';
-  return staff.map(s=>`<span class="staff-chip">${s}</span>`).join('');
+  return staff.map(s=>`<span class="staff-chip">${escapeHtml(s)}</span>`).join('');
 }
 function protectedPhiLabel(){
   let title = 'Patient identifiers are not stored in the shared public summary table. Import the latest Smartsheet CSV on this work computer to show them locally.';
@@ -2088,63 +2167,79 @@ function varianceLabel(v, entry){
   const displayStatus = allReturned ? 'received' : (partialReturned ? 'sent' : status);
   const map = {not_sent:'Not sent', sent:'Awaiting return', received:'Returned', na:'N/A'};
   const label = partialReturned ? 'Partial return' : (allReturned ? 'Returned' : (map[displayStatus] || displayStatus));
-  const title = summary.latestDate ? ` title="Latest return ${summary.latestDate}"` : (v && v.dateSent ? ` title="Sent ${v.dateSent}"` : '');
+  const title = summary.latestDate ? ` title="Latest return ${escapeHtml(summary.latestDate)}"` : (v && v.dateSent ? ` title="Sent ${escapeHtml(v.dateSent)}"` : '');
   let detail = '';
   if(summary.total > 1 && summary.returned > 0){
     detail = `<div class="returned-meta">${summary.returned}/${summary.total} signed${summary.pending.length ? ' · awaiting ' + escapeHtml(summary.pending.join(', ')) : ' · all listed staff signed'}</div>`;
   } else if(v && v.dateReceived){
     detail = `<div class="returned-meta">${fmtDate(v.dateReceived)}${v.receivedAutomatically ? ' · employee signed' : ''}</div>`;
   }
+  const due = varianceDueDate(entry);
+  if(displayStatus === 'sent' && due){
+    detail += isOverdue(entry)
+      ? `<div class="returned-meta"><span class="overdue-badge">Overdue ${overdueDays(entry)}d</span> due ${fmtDate(due)}</div>`
+      : `<div class="returned-meta">Due ${fmtDate(due)}</div>`;
+  }
   return `<span class="var-pill var-${displayStatus}"${title}>${label}</span>${detail}`;
 }
 
 function renderTable(){
-  const all = visibleEntries();
-  const monthEntries = entriesForSelectedMonth(all);
-  const tabEntries = currentTab==='all' ? monthEntries : monthEntries.filter(e=>e.type===currentTab);
-  const entries = tabEntries.filter(e=>!auditLineSearch || String(e.auditLineNumber || '').toLowerCase().includes(auditLineSearch))
-    .sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  const entries = filteredEntries();
   const wrap = document.getElementById('tableWrap');
+  renderBulkBar();
 
   if(entries.length===0){
     wrap.innerHTML = '<div class="empty">No entries in this view yet.</div>';
     return;
   }
 
-  let rows = entries.map(e=>`
+  const allSelected = entries.every(e=>selectedIds.has(e.id));
+  let rows = entries.map(e=>{
+    const rc = repeatCount(e);
+    const idq = escapeHtml(e.id);
+    const vstatus = (e.variance && e.variance.status) || 'not_sent';
+    const coachMeta = (e.coach && e.coach.date)
+      ? `<div class="returned-meta">Coached ${escapeHtml(fmtDate(e.coach.date))}${e.coach.method ? ' · ' + escapeHtml(e.coach.method) : ''}</div>`
+      : '';
+    const repeatBadge = rc
+      ? `<div style="margin-top:6px;"><span class="repeat-badge${rc>=3?' hot':''}" title="Same employee, same category within 90 days">Repeat ×${rc}</span></div>`
+      : '';
+    return `
     <tr>
+      <td data-label="Select"><input type="checkbox" ${selectedIds.has(e.id)?'checked':''} onchange="toggleSelect('${idq}',this.checked)" aria-label="Select entry"></td>
       <td data-label="Date">${fmtDate(e.date)}</td>
       <td data-label="Line #" class="mrn">${escapeHtml(e.auditLineNumber || '—')}</td>
-      <td data-label="Type"><span class="type-pill">${AUDIT_TYPES[e.type]?.short || e.type}</span></td>
-      <td data-label="Patient">${patientCell(e)}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${e.unit})</span>` : ''}</td>
+      <td data-label="Type"><span class="type-pill">${escapeHtml(AUDIT_TYPES[e.type]?.short || e.type)}</span></td>
+      <td data-label="Patient">${patientCell(e)}${e.unit ? ` <span style="color:var(--muted);font-size:11px;">(${escapeHtml(e.unit)})</span>` : ''}</td>
       <td data-label="MR#" class="mrn">${mrnCell(e)}</td>
-      <td data-label="Issue" class="issue-cell">${htmlWithLineBreaks(summarize(e))}</td>
-      <td data-label="Staff">${staffChips(e.staff)}</td>
+      <td data-label="Issue" class="issue-cell">${htmlWithLineBreaks(summarize(e))}${repeatBadge}</td>
+      <td data-label="Staff">${staffChips(e.staff)}${coachMeta}</td>
       <td data-label="Status"><span class="status-pill status-${e.status}">${e.status==='open'?'Open':'Closed'}</span></td>
       <td data-label="Variance">${varianceLabel(e.variance, e)}</td>
       <td data-label="Actions" class="row-actions actions-cell">
-        <button onclick="editEntry('${e.id}')">Edit</button>
-        <button onclick="sendVariance('${e.id}')" title="Copy or show the variance response link. Use Mark Sent after sharing it.">Copy Link</button>
-        <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the source Smartsheet and copy row lookup details">Smartsheet</button>
-        ${(!e.variance || e.variance.status==='not_sent') ? `<button onclick="markVarianceSent('${e.id}')" title="Confirm the variance was actually sent">Mark Sent</button>` : ''}
-        ${varianceCanMarkReceived(e) ? `<button onclick="receiveVariance('${e.id}')" title="Mark one staff variance form as returned">Mark Received</button>` : ''}
-        ${(e.variance && ['sent','received'].includes(e.variance.status)) ? `<button onclick="resetVarianceStatus('${e.id}')" title="Correct the variance status back to not sent">Reset Status</button>` : ''}
-        ${hasReturnedForms(e) ? `<button onclick="printReturnedForm('${e.id}')" title="View and print returned form(s)">Print Form</button>` : ''}
-        <button onclick="deleteEntry('${e.id}')">Delete</button>
+        <button onclick="editEntry('${idq}')">Edit</button>
+        ${vstatus!=='received' && vstatus!=='na' ? `<button onclick="emailVariance('${idq}')" title="Open an email to the listed staff with their signing link and mark the variance sent">Email Variance</button>` : ''}
+        <button onclick="copyVarianceLinks('${idq}')" title="Copy the variance response link(s). Use Mark Sent after sharing.">Copy Link</button>
+        ${isOverdue(e) ? `<button onclick="remindVariance('${idq}')" title="Email a reminder to staff who have not signed">Remind</button>` : ''}
+        <button onclick="openSmartsheetForEntry('${idq}')" title="Open the source Smartsheet row and copy lookup details">Smartsheet</button>
+        ${vstatus==='not_sent' ? `<button onclick="markVarianceSent('${idq}')" title="Confirm the variance was actually sent">Mark Sent</button>` : ''}
+        ${varianceCanMarkReceived(e) ? `<button onclick="receiveVariance('${idq}')" title="Mark one staff variance form as returned">Mark Received</button>` : ''}
+        ${['sent','received'].includes(vstatus) ? `<button onclick="resetVarianceStatus('${idq}')" title="Correct the variance status back to not sent">Reset Status</button>` : ''}
+        ${hasReturnedForms(e) ? `<button onclick="printReturnedForm('${idq}')" title="View and print returned form(s)">Print Form</button>` : ''}
+        <button onclick="deleteEntry('${idq}')">Delete</button>
       </td>
-    </tr>
-  `).join('');
+    </tr>`;
+  }).join('');
 
   wrap.innerHTML = `
     <table class="notifications-table">
       <thead><tr>
-        <th>Date</th><th>Line #</th><th>Type</th><th>Patient</th><th>MR#</th><th>Issue</th><th>Staff</th><th>Status</th><th>Variance</th><th></th>
+        <th><input type="checkbox" ${allSelected?'checked':''} onchange="toggleSelectAll(this.checked)" aria-label="Select all"></th><th>Date</th><th>Line #</th><th>Type</th><th>Patient</th><th>MR#</th><th>Issue</th><th>Staff</th><th>Status</th><th>Variance</th><th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
 }
-
 function setLineSearch(value){
   auditLineSearch = String(value || '').trim().toLowerCase();
   renderTable();
@@ -2205,7 +2300,7 @@ function variancePrintSection(e, ackOverride){
     <h2>Employee response</h2><p>${escapeHtml(response)}</p>
     <div class="signature"><div><b>Printed name</b><span>${escapeHtml(employee)}</span></div><div><b>Signed / received</b><span>${escapeHtml(signedAt || '—')}</span></div></div>
     <div class="signature-image"><b>Employee drawn signature</b>${signatureImg}</div>
-    <div class="manager"><b>Manager follow-up / action taken</b><div></div></div>
+    <div class="manager"><b>Manager follow-up / action taken</b><div style="padding:8px 10px;white-space:pre-wrap;font-size:13px;">${escapeHtml((e.manager && e.manager.text) || '')}${(e.manager && e.manager.date) ? '\n\nCompleted: ' + escapeHtml(fmtDate(e.manager.date)) : ''}</div></div>
     <div class="manager-sign"><span>Manager signature</span><span>Date</span></div>
   </section>`;
 }
@@ -2253,6 +2348,7 @@ function renderStats(){
   document.getElementById('statVariance').textContent = entries.filter(e=>!e.variance || e.variance.status==='not_sent').length;
   document.getElementById('statAwaiting').textContent = entries.filter(e=>e.variance && e.variance.status==='sent').length;
   document.getElementById('statReturned').textContent = entries.reduce((count, entry) => count + returnedRecordsForEntry(entry).length, 0);
+  document.getElementById('statOverdue').textContent = entries.filter(isOverdue).length;
 
   const autoReturns = entries.flatMap(returnedRecordsForEntry).filter(record=>record.entry.variance && record.entry.variance.receivedAutomatically);
   const seen = new Set(JSON.parse(localStorage.getItem('audit_seen_returns_v1') || '[]'));
@@ -2346,10 +2442,15 @@ function renderMissingMost(){
 }
 
 function renderAll(){
+  _repeatIdx = buildRepeatIndex(visibleEntries());
   renderTabs();
+  renderFilterOptions();
+  renderUnassigned();
   renderTable();
   renderStats();
   renderReturnedForms();
+  renderTrends();
+  renderEmployees();
   renderMissingMost();
 }
 
@@ -2372,7 +2473,7 @@ function buildStaffPickerHTML(entry){
       </div>
       <div class="checkbox-row" style="margin-top:10px;">
         <input type="checkbox" id="over24h" onchange="renderStaffChips()" ${entry && entry.over24h ? 'checked':''}>
-        <label style="text-transform:none;font-family:var(--sans);font-size:13px;color:var(--text);margin:0;">Audit covers more than 24 hours (allows more than 2 names)</label>
+        <label style="text-transform:none;font-family:var(--sans);font-size:13px;color:var(--text);margin:0;">Allow more than 2 staff on this finding</label>
       </div>
       <p class="hint" id="staffLimitHint"></p>
     </div>
@@ -2381,14 +2482,13 @@ function buildStaffPickerHTML(entry){
 function renderStaffChips(){
   const wrap = document.getElementById('staffChipsWrap');
   if(!wrap) return;
-  wrap.innerHTML = modalStaff.map((s,i)=>`<span class="chip">${s}<button type="button" onclick="removeStaff(${i})">&times;</button></span>`).join('') || '<span class="missing-empty">None selected</span>';
+  wrap.innerHTML = modalStaff.map((s,i)=>`<span class="chip">${escapeHtml(s)}<button type="button" onclick="removeStaff(${i})">&times;</button></span>`).join('') || '<span class="missing-empty">None selected</span>';
   const over24h = document.getElementById('over24h')?.checked;
-  const limit = over24h ? Infinity : 2;
   const hint = document.getElementById('staffLimitHint');
   if(hint){
     hint.textContent = over24h
-      ? `${modalStaff.length} name(s) added — no limit while this audit spans more than 24 hours.`
-      : `${modalStaff.length}/2 names added. Check the box above to add more for audits spanning over 24 hours.`;
+      ? `${modalStaff.length} name(s) added — no limit on this finding.`
+      : `${modalStaff.length}/2 names added. Check the box above to add more to this finding.`;
   }
 }
 function addStaffFromDirectory(){
@@ -2412,7 +2512,7 @@ function addStaffName(name){
   const limit = over24h ? Infinity : 2;
   if(modalStaff.includes(name)) return;
   if(modalStaff.length >= limit){
-    alert('Max 2 staff names unless this audit covers more than 24 hours. Check the box to add more.');
+    alert('Max 2 staff names per finding. Check the box to add more.');
     return;
   }
   modalStaff.push(name);
@@ -2461,7 +2561,7 @@ function renderModalBody(entry){
     <div class="field-row3">
       <div class="field">
         <label>Date</label>
-        <input type="date" id="fDate" value="${entry?.date || new Date().toISOString().slice(0,10)}">
+        <input type="date" id="fDate" value="${entry?.date || todayLocal()}">
       </div>
       <div class="field">
         <label>Audit Line #</label>
@@ -2488,7 +2588,7 @@ function renderModalBody(entry){
     ${phiAllowed ? '' : '<p class="hint">Patient/MR# fields are locked. Open Settings and unlock PHI on the trusted work computer to view or edit them.</p>'}
     <div class="field">
       <label>Context (unit / shift / visit#, optional)</label>
-      <input type="text" id="fContext" value="${entry?.context || ''}" placeholder="e.g. Unit 3B, Night shift 08/13/26">
+      <input type="text" id="fContext" value="${escapeHtml(entry?.context || '')}" placeholder="e.g. Unit 3B, Night shift 08/13/26">
     </div>
 
     <div class="section-label">Compliance detail</div>
@@ -2507,7 +2607,7 @@ function renderModalBody(entry){
     ${buildStaffPickerHTML(entry)}
     <div class="field">
       <label>Reported by (Smartsheet)</label>
-      <input type="text" id="fReporter" value="${entry?.reporter || ''}" placeholder="e.g. jane.smith@arnothealth.org">
+      <input type="text" id="fReporter" value="${escapeHtml(entry?.reporter || '')}" placeholder="e.g. jane.smith@arnothealth.org">
     </div>
 
     <div class="section-label">Variance form</div>
@@ -2532,8 +2632,40 @@ function renderModalBody(entry){
           <label>Date received</label>
           <input type="date" id="fVarianceReceivedDate" value="${entry?.variance?.dateReceived || ''}">
         </div>
+        <div class="field">
+          <label>Due date</label>
+          <input type="date" id="fVarianceDue" value="${entry?.variance?.dueDate || ''}">
+        </div>
       </div>
-      <p class="hint">Use the "Variance" button on a saved row to open a pre-filled email to your CC list (set in Settings). Once staff return the form, use the row's "✅ Received" button (or set status here) to log it.</p>
+      <p class="hint">Use "Email Variance" on a saved row to open a pre-filled email with each staff member's signing link; it marks the variance sent and sets the due date. Signed returns update this automatically.</p>
+    </div>
+
+    <div class="section-label">Coaching delivered</div>
+    <div class="field-row3">
+      <div class="field">
+        <label>Date</label>
+        <input type="date" id="fCoachDate" value="${entry?.coach?.date || ''}">
+      </div>
+      <div class="field">
+        <label>Method</label>
+        <select id="fCoachMethod">
+          ${['','Verbal 1:1','Huddle','Email','Written','Education assigned'].map(m=>`<option value="${m}" ${(entry?.coach?.method||'')===m?'selected':''}>${m||'—'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>Coached by</label>
+        <input type="text" id="fCoachBy" value="${escapeHtml(entry?.coach?.by || '')}" placeholder="e.g. Ron">
+      </div>
+    </div>
+
+    <div class="section-label">Manager follow-up</div>
+    <div class="field">
+      <label>Action taken</label>
+      <textarea id="fMgrText" placeholder="Coaching conversation, education assigned, action plan... (saving this with the variance returned closes the finding)">${escapeHtml(entry?.manager?.text || '')}</textarea>
+    </div>
+    <div class="field" style="max-width:220px;">
+      <label>Date completed</label>
+      <input type="date" id="fMgrDate" value="${entry?.manager?.date || ''}">
     </div>
   `;
   body.innerHTML = html;
@@ -2565,11 +2697,18 @@ function editEntry(id){
   if(e) openModal(e);
 }
 function deleteEntry(id){
-  if(!confirm('Delete this entry?')) return;
-  let entries = loadEntries().filter(e=>e.id!==id);
-  saveEntries(entries);
+  const entries = loadEntries();
+  const entry = entries.find(e=>e.id===id);
+  if(!entry) return;
+  saveEntries(entries.filter(e=>e.id!==id));
+  const trash = loadTrash();
+  trash.unshift({ entry, deletedAt: new Date().toISOString() });
+  saveTrash(trash);
+  logActivity('deleted', entry);
   deleteAuditFinding(id);
+  selectedIds.delete(id);
   renderAll();
+  showUndoToast('Entry deleted.', ()=>restoreFromTrash(id));
 }
 
 async function saveEntry(){
@@ -2601,14 +2740,27 @@ async function saveEntry(){
     staff: [...modalStaff],
     over24h,
     reporter: document.getElementById('fReporter').value.trim(),
+    manager: {
+      text: document.getElementById('fMgrText').value.trim(),
+      date: document.getElementById('fMgrDate').value
+    },
+    coach: {
+      date: document.getElementById('fCoachDate').value,
+      method: document.getElementById('fCoachMethod').value,
+      by: document.getElementById('fCoachBy').value.trim()
+    },
     // Once a shared summary is edited here, preserve the full local fields during refresh.
     sharedSummaryOnly: false,
     variance: {
       status: document.getElementById('fVarianceStatus').value,
       dateSent: document.getElementById('fVarianceDate').value,
-      dateReceived: document.getElementById('fVarianceReceivedDate').value
+      dateReceived: document.getElementById('fVarianceReceivedDate').value,
+      dueDate: document.getElementById('fVarianceDue').value
     }
   };
+  if(data.variance.status === 'sent' && data.variance.dateSent && !data.variance.dueDate){
+    data.variance.dueDate = addDays(data.variance.dateSent, getDueDays());
+  }
 
   if(editingId){
     const idx = entries.findIndex(e=>e.id===editingId);
@@ -2617,6 +2769,9 @@ async function saveEntry(){
     data.id = 'entry_' + Date.now();
     entries.push(data);
   }
+  const toSave = entries.find(e=>e.id===(editingId||data.id));
+  const autoClosed = toSave ? maybeAutoClose(toSave) : false;
+  if(toSave) logActivity(editingId ? 'edited' : 'created', toSave, autoClosed ? 'auto-closed (variance returned + manager follow-up)' : '');
   saveEntries(entries);
   const savedEntry = entries.find(e=>e.id===(editingId||data.id));
   closeModal();
@@ -2644,7 +2799,7 @@ function emailRecipients(value){
     .filter(email=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))];
 }
 
-async function sendVariance(id){
+async function copyVarianceLinks(id){
   const e = loadEntries().find(x=>x.id===id);
   if(!e) return;
   const staffNames = entryRequiredStaff(e);
@@ -2667,23 +2822,22 @@ function markVarianceSent(id){
   let entries = loadEntries();
   const idx = entries.findIndex(x=>x.id===id);
   if(idx<0) return;
-  const dateSent = prompt('Date the variance was actually sent (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+  const dateSent = prompt('Date the variance was actually sent (YYYY-MM-DD):', todayLocal());
   if(dateSent===null) return;
-  entries[idx].variance = entries[idx].variance || {};
-  entries[idx].variance.status = 'sent';
-  entries[idx].variance.dateSent = dateSent.trim() || new Date().toISOString().slice(0,10);
-  entries[idx].variance.dateReceived = '';
+  const clean = dateSent.trim();
+  applySentState(entries[idx], /^\d{4}-\d{2}-\d{2}$/.test(clean) ? clean : todayLocal());
+  logActivity('variance_sent', entries[idx], 'manual');
   saveEntries(entries);
   pushAuditFinding(entries[idx]);
   renderAll();
 }
-
 function resetVarianceStatus(id){
   if(!confirm('Change this variance back to Not sent?')) return;
   let entries = loadEntries();
   const idx = entries.findIndex(x=>x.id===id);
   if(idx<0) return;
-  entries[idx].variance = { status:'not_sent', dateSent:'', dateReceived:'' };
+  entries[idx].variance = { status:'not_sent', dateSent:'', dueDate:'', dateReceived:'' };
+  logActivity('variance_reset', entries[idx]);
   saveEntries(entries);
   pushAuditFinding(entries[idx]);
   renderAll();
@@ -2704,9 +2858,9 @@ async function receiveVariance(id){
   } else {
     staffName = pending[0] || (e.staff || [])[0] || '';
   }
-  const dateReceived = prompt('Date variance form was returned (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+  const dateReceived = prompt('Date variance form was returned (YYYY-MM-DD):', todayLocal());
   if(dateReceived===null) return;
-  const dateValue = dateReceived.trim() || new Date().toISOString().slice(0,10);
+  const dateValue = dateReceived.trim() || todayLocal();
   const signedAt = dateValue + 'T12:00:00.000Z';
   const ackRow = {
     finding_id: id,
@@ -2738,6 +2892,8 @@ async function receiveVariance(id){
   entries[idx].variance.receivedAutomatically = true;
   entries[idx].variance.returnedCount = summary.returned;
   entries[idx].variance.returnedTotal = summary.total;
+  logActivity('variance_returned', entries[idx], staffName || '');
+  if(maybeAutoClose(entries[idx])) logActivity('auto_closed', entries[idx], 'variance returned + manager follow-up');
   saveEntries(entries);
   pushAuditFinding(entries[idx]);
   renderAll();
@@ -2749,6 +2905,7 @@ async function openSettings(){
   renderDirectoryChips();
   renderSmartsheetSourceButtons();
   renderPhiControls();
+  renderSettingsExtras();
   document.getElementById('ccList').value = loadCC();
   document.getElementById('settingsOverlay').classList.add('show');
 }
@@ -2778,12 +2935,654 @@ function removeFromDirectory(i){
 }
 function saveSettings(){
   saveCC(document.getElementById('ccList').value.trim());
+  const due = parseInt(document.getElementById('dueDaysInput').value, 10);
+  safeStorageSet(localStorage, DUE_DAYS_KEY, String(due > 0 ? due : 7));
   closeSettings();
+  renderAll();
+}
+
+// ---------- workflow upgrades (v2) ----------
+// History window, due dates, overdue tracking, repeat detection, filters,
+// bulk actions, exports, trends, per-employee view, unit review queue,
+// soft delete + undo, activity log.
+
+function getLookbackDays(){
+  const v = parseInt(safeStorageGet(localStorage, LOOKBACK_KEY, '60'), 10);
+  return v > 0 ? v : 60;
+}
+function setLookback(value){
+  safeStorageSet(localStorage, LOOKBACK_KEY, String(parseInt(value, 10) || 60));
+  showTemporaryStatus('History window updated. Reloading shared audits...');
+  loadSharedAuditFindings();
+}
+function getDueDays(){
+  const v = parseInt(safeStorageGet(localStorage, DUE_DAYS_KEY, '7'), 10);
+  return v > 0 ? v : 7;
+}
+
+// ----- dates -----
+function pad2(n){ return String(n).padStart(2, '0'); }
+function todayLocal(){
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function addDays(iso, n){
+  const parts = String(iso || '').slice(0, 10).split('-').map(Number);
+  if(parts.length < 3 || parts.some(Number.isNaN)) return '';
+  const dt = new Date(parts[0], parts[1] - 1, parts[2] + n);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+function daysBetween(a, b){
+  const pa = String(a || '').slice(0, 10).split('-').map(Number);
+  const pb = String(b || '').slice(0, 10).split('-').map(Number);
+  if(pa.length < 3 || pb.length < 3 || pa.concat(pb).some(Number.isNaN)) return null;
+  return Math.round((Date.UTC(pb[0], pb[1] - 1, pb[2]) - Date.UTC(pa[0], pa[1] - 1, pa[2])) / 86400000);
+}
+function isoOrNull(value){
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? value : null;
+}
+
+// ----- sync change tracking (only push rows that changed) -----
+function loadSyncHashes(){
+  try { return JSON.parse(localStorage.getItem(SYNC_HASH_KEY)) || {}; } catch(e) { return {}; }
+}
+function saveSyncHashes(h){
+  try { localStorage.setItem(SYNC_HASH_KEY, JSON.stringify(h)); } catch(e) {}
+}
+function payloadHash(entry){
+  return simpleHash(JSON.stringify(auditFindingPayload(entry)));
+}
+
+// ----- activity log + trash -----
+function loadLog(){
+  try { return JSON.parse(localStorage.getItem(LOG_KEY)) || []; } catch(e) { return []; }
+}
+function logActivity(action, entry, detail){
+  const log = loadLog();
+  log.unshift({
+    t: new Date().toISOString(),
+    id: (entry && entry.id) || '',
+    line: (entry && entry.auditLineNumber) || '',
+    type: (entry && entry.type) || '',
+    action,
+    detail: detail || ''
+  });
+  try { localStorage.setItem(LOG_KEY, JSON.stringify(log.slice(0, 500))); } catch(e) {}
+}
+function loadTrash(){
+  try { return JSON.parse(localStorage.getItem(TRASH_KEY)) || []; } catch(e) { return []; }
+}
+function saveTrash(list){
+  try { localStorage.setItem(TRASH_KEY, JSON.stringify(list.slice(0, 30))); } catch(e) {}
+}
+function showUndoToast(message, onUndo){
+  const old = document.getElementById('undoToast');
+  if(old) old.remove();
+  const node = document.createElement('div');
+  node.id = 'undoToast';
+  node.className = 'undo-toast';
+  const span = document.createElement('span');
+  span.textContent = message;
+  const btn = document.createElement('button');
+  btn.className = 'ghost small';
+  btn.textContent = 'Undo';
+  btn.onclick = () => { onUndo(); node.remove(); };
+  node.append(span, btn);
+  document.body.appendChild(node);
+  setTimeout(() => node.remove(), 10000);
+}
+async function restoreFromTrash(id){
+  const trash = loadTrash();
+  const i = trash.findIndex(x => x.entry && x.entry.id === id);
+  if(i < 0) return;
+  const entry = trash[i].entry;
+  trash.splice(i, 1);
+  saveTrash(trash);
+  const entries = loadEntries();
+  if(!entries.some(e => e.id === id)) entries.push(entry);
+  saveEntries(entries);
+  logActivity('restored', entry);
+  renderAll();
+  renderSettingsExtras();
+  await pushAuditFinding(entry);
+}
+
+// ----- variance state helpers -----
+function applySentState(entry, dateSent){
+  const d = dateSent || todayLocal();
+  entry.variance = entry.variance || {};
+  entry.variance.status = 'sent';
+  entry.variance.dateSent = d;
+  entry.variance.dueDate = addDays(d, getDueDays());
+  entry.variance.dateReceived = '';
+}
+function varianceDueDate(e){
+  const v = e && e.variance;
+  if(!v) return '';
+  return v.dueDate || (v.dateSent ? addDays(v.dateSent, getDueDays()) : '');
+}
+function isOverdue(e){
+  const v = e && e.variance;
+  if(!v || v.status !== 'sent') return false;
+  if(entryReturnSummary(e).allReturned) return false;
+  const due = varianceDueDate(e);
+  return !!due && due < todayLocal();
+}
+function overdueDays(e){
+  const due = varianceDueDate(e);
+  const n = due ? daysBetween(due, todayLocal()) : null;
+  return n && n > 0 ? n : 0;
+}
+function managerDone(e){
+  return !!(e && e.manager && String(e.manager.text || '').trim());
+}
+function needsAction(e){
+  if(!e || e.status !== 'open') return false;
+  const status = (e.variance && e.variance.status) || 'not_sent';
+  if(status === 'not_sent') return entryRequiredStaff(e).length > 0;
+  if(isOverdue(e)) return true;
+  if(status === 'received' && !managerDone(e)) return true;
+  return false;
+}
+// Variance returned/not applicable + manager follow-up recorded => closed.
+function maybeAutoClose(entry){
+  if(!entry || entry.status === 'closed') return false;
+  const status = entry.variance && entry.variance.status;
+  if((status === 'received' || status === 'na') && managerDone(entry)){
+    entry.status = 'closed';
+    return true;
+  }
+  return false;
+}
+
+// ----- repeat findings (same employee + same category within 90 days) -----
+let _repeatIdx = new Map();
+function categoryPairs(e){
+  const out = [];
+  const seen = new Set();
+  ((e && e.tags) || []).forEach(t => {
+    const label = String(t || '').trim();
+    const key = label.toLowerCase();
+    if(key && !seen.has(key)){ seen.add(key); out.push({ key, label }); }
+  });
+  return out;
+}
+function buildRepeatIndex(entries){
+  const idx = new Map();
+  entries.forEach(e => {
+    if(!e.date) return;
+    const cats = categoryPairs(e);
+    entryRequiredStaff(e).forEach(name => {
+      const sk = staffNameKey(name);
+      if(!sk) return;
+      cats.forEach(c => {
+        const k = sk + '|' + c.key;
+        if(!idx.has(k)) idx.set(k, []);
+        idx.get(k).push(e.date);
+      });
+    });
+  });
+  idx.forEach(list => list.sort());
+  return idx;
+}
+function repeatCount(e){
+  if(!e || !e.date) return 0;
+  const cut = addDays(e.date, -90);
+  let best = 0;
+  const cats = categoryPairs(e);
+  entryRequiredStaff(e).forEach(name => {
+    const sk = staffNameKey(name);
+    if(!sk) return;
+    cats.forEach(c => {
+      const list = _repeatIdx.get(sk + '|' + c.key) || [];
+      const n = list.filter(d => d >= cut && d <= e.date).length;
+      if(n > best) best = n;
+    });
+  });
+  return best >= 2 ? best : 0;
+}
+
+// ----- filters -----
+function filteredEntries(){
+  const monthEntries = entriesForSelectedMonth(visibleEntries());
+  let list = currentTab === 'all' ? monthEntries : monthEntries.filter(e => e.type === currentTab);
+  if(auditLineSearch) list = list.filter(e => String(e.auditLineNumber || '').toLowerCase().includes(auditLineSearch));
+  if(auditStaffFilter) list = list.filter(e => entryRequiredStaff(e).some(n => staffNameKey(n) === auditStaffFilter));
+  if(auditStatusFilter) list = list.filter(e => e.status === auditStatusFilter);
+  if(auditVarianceFilter){
+    list = list.filter(e => {
+      const status = (e.variance && e.variance.status) || 'not_sent';
+      if(auditVarianceFilter === 'overdue') return isOverdue(e);
+      return status === auditVarianceFilter;
+    });
+  }
+  if(needsActionOnly) list = list.filter(needsAction);
+  return list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+function renderFilterOptions(){
+  const sel = document.getElementById('staffFilter');
+  if(!sel) return;
+  const names = new Map();
+  visibleEntries().forEach(e => entryRequiredStaff(e).forEach(n => {
+    const k = staffNameKey(n);
+    if(k && !names.has(k)) names.set(k, n);
+  }));
+  const opts = [...names.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([k, n]) => `<option value="${escapeHtml(k)}">${escapeHtml(n)}</option>`).join('');
+  sel.innerHTML = '<option value="">All staff</option>' + opts;
+  if(auditStaffFilter && !names.has(auditStaffFilter)) auditStaffFilter = '';
+  sel.value = auditStaffFilter;
+  document.getElementById('statusFilter').value = auditStatusFilter;
+  document.getElementById('varianceFilter').value = auditVarianceFilter;
+  document.getElementById('needsActionToggle').checked = needsActionOnly;
+}
+function setStaffFilter(v){ auditStaffFilter = v || ''; renderTable(); }
+function setStatusFilter(v){ auditStatusFilter = v || ''; renderTable(); }
+function setVarianceFilter(v){ auditVarianceFilter = v || ''; renderTable(); }
+function setNeedsAction(on){ needsActionOnly = !!on; renderTable(); }
+function filterByStaff(key){
+  auditStaffFilter = key || '';
+  renderFilterOptions();
+  renderTable();
+  const wrap = document.getElementById('tableWrap');
+  if(wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ----- bulk actions -----
+function toggleSelect(id, checked){
+  if(checked) selectedIds.add(id); else selectedIds.delete(id);
+  renderBulkBar();
+}
+function toggleSelectAll(checked){
+  if(checked) filteredEntries().forEach(e => selectedIds.add(e.id)); else selectedIds.clear();
+  renderTable();
+}
+function clearSelection(){ selectedIds.clear(); renderTable(); }
+function renderBulkBar(){
+  const bar = document.getElementById('bulkBar');
+  if(!bar) return;
+  const n = selectedIds.size;
+  if(!n){ bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  bar.style.display = 'flex';
+  bar.innerHTML = `<span>${n} selected</span>
+    <button class="ghost small" onclick="bulkMarkSent()">Mark variance sent</button>
+    <button class="ghost small" onclick="bulkSetStatus('closed')">Close</button>
+    <button class="ghost small" onclick="bulkSetStatus('open')">Reopen</button>
+    <button class="ghost small" onclick="bulkExport()">Export CSV</button>
+    <button class="ghost small" onclick="clearSelection()">Clear</button>`;
+}
+async function bulkMarkSent(){
+  const ids = [...selectedIds];
+  if(!ids.length) return;
+  if(!confirm(`Mark ${ids.length} selected entries as variance sent today (due in ${getDueDays()} days)? Only use this after the links were actually sent.`)) return;
+  const entries = loadEntries();
+  const touched = [];
+  entries.forEach(e => {
+    if(!selectedIds.has(e.id)) return;
+    const status = (e.variance && e.variance.status) || 'not_sent';
+    if(status !== 'not_sent') return;
+    applySentState(e);
+    logActivity('variance_sent', e, 'bulk');
+    touched.push(e);
+  });
+  saveEntries(entries);
+  selectedIds.clear();
+  renderAll();
+  for(const e of touched){
+    await createAcknowledgmentRequests(e);
+    await pushAuditFinding(e);
+  }
+}
+async function bulkSetStatus(status){
+  const ids = [...selectedIds];
+  if(!ids.length) return;
+  if(!confirm(`${status === 'closed' ? 'Close' : 'Reopen'} ${ids.length} selected entries?`)) return;
+  const entries = loadEntries();
+  const touched = [];
+  entries.forEach(e => {
+    if(!selectedIds.has(e.id) || e.status === status) return;
+    e.status = status;
+    logActivity(status === 'closed' ? 'closed' : 'reopened', e, 'bulk');
+    touched.push(e);
+  });
+  saveEntries(entries);
+  selectedIds.clear();
+  renderAll();
+  for(const e of touched) await pushAuditFinding(e);
+}
+
+// ----- exports (de-identified: no patient name / MR# / free text) -----
+function csvCell(v){
+  const s = String(v == null ? '' : v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function exportRows(list){
+  const header = ['Date', 'Audit line #', 'Type', 'Unit', 'Status', 'Staff', 'Categories', 'Variance status', 'Variance sent', 'Variance due', 'Variance returned', 'Overdue', 'Repeat count'];
+  const rows = list.map(e => [
+    e.date || '',
+    e.auditLineNumber || '',
+    (AUDIT_TYPES[e.type] && AUDIT_TYPES[e.type].label) || e.type || '',
+    e.unit || '',
+    e.status || '',
+    (e.staff || []).join('; '),
+    (e.tags || []).join('; '),
+    (e.variance && e.variance.status) || 'not_sent',
+    (e.variance && e.variance.dateSent) || '',
+    varianceDueDate(e),
+    (e.variance && e.variance.dateReceived) || '',
+    isOverdue(e) ? 'Yes' : '',
+    repeatCount(e) || ''
+  ]);
+  return [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
+}
+function downloadText(name, text, mime){
+  const blob = new Blob([text], { type: mime || 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function exportFilteredCsv(){
+  const list = filteredEntries();
+  if(!list.length){ alert('Nothing to export in this view.'); return; }
+  downloadText(`audit-export-${todayLocal()}.csv`, exportRows(list));
+}
+function bulkExport(){
+  const list = visibleEntries().filter(e => selectedIds.has(e.id)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  if(!list.length) return;
+  downloadText(`audit-export-selected-${todayLocal()}.csv`, exportRows(list));
+}
+
+// ----- per-employee stats -----
+function employeeStats(entries){
+  const by = new Map();
+  entries.forEach(e => {
+    const staff = entryRequiredStaff(e);
+    staff.forEach(name => {
+      const key = staffNameKey(name);
+      if(!key) return;
+      if(!by.has(key)) by.set(key, { name, key, findings: 0, open: 0, sent: 0, returned: 0, overdue: 0, cats: new Map() });
+      const r = by.get(key);
+      r.findings++;
+      if(e.status === 'open') r.open++;
+      const vs = (e.variance && e.variance.status) || 'not_sent';
+      const ack = !!acknowledgmentForStaff(e.id, name) || (vs === 'received' && staff.length === 1);
+      if(ack || vs === 'sent' || vs === 'received') r.sent++;
+      if(ack) r.returned++;
+      else if(isOverdue(e)) r.overdue++;
+      categoryPairs(e).forEach(c => {
+        const cur = r.cats.get(c.key) || { label: c.label, count: 0 };
+        cur.count++;
+        r.cats.set(c.key, cur);
+      });
+    });
+  });
+  return [...by.values()].sort((a, b) => b.findings - a.findings || a.name.localeCompare(b.name));
+}
+function renderEmployees(){
+  const wrap = document.getElementById('employeeWrap');
+  if(!wrap) return;
+  const stats = employeeStats(entriesForSelectedMonth(visibleEntries()));
+  if(!stats.length){ wrap.innerHTML = '<div class="empty">No staff tagged on findings in this period.</div>'; return; }
+  wrap.innerHTML = `<table><thead><tr><th>Employee</th><th>Findings</th><th>Open</th><th>Repeat categories</th><th>Returned</th><th>Overdue</th><th></th></tr></thead><tbody>${stats.map(r => {
+    const repeats = [...r.cats.values()].filter(c => c.count >= 2).sort((a, b) => b.count - a.count).slice(0, 3)
+      .map(c => `<span class="repeat-badge${c.count >= 3 ? ' hot' : ''}">${escapeHtml(c.label)} ×${c.count}</span>`).join(' ');
+    const pct = r.sent ? Math.round((r.returned / r.sent) * 100) : null;
+    return `<tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${r.findings}</td>
+      <td>${r.open}</td>
+      <td>${repeats || '<span style="color:var(--muted)">—</span>'}</td>
+      <td>${r.sent ? `${r.returned}/${r.sent} (${pct}%)` : '—'}</td>
+      <td>${r.overdue ? `<span class="overdue-badge">${r.overdue}</span>` : '—'}</td>
+      <td class="row-actions"><button data-key="${escapeHtml(r.key)}" onclick="filterByStaff(this.dataset.key)">Show findings</button><button data-key="${escapeHtml(r.key)}" onclick="emailEmployeeOpen(this.dataset.key)">Email open variances</button></td>
+    </tr>`;
+  }).join('')}</tbody></table>`;
+}
+
+// ----- trends -----
+let _charts = [];
+function renderTrends(){
+  const wrap = document.getElementById('trendsWrap');
+  if(!wrap) return;
+  _charts.forEach(c => { try { c.destroy(); } catch(e) {} });
+  _charts = [];
+  if(typeof Chart === 'undefined'){
+    wrap.innerHTML = '<div class="empty" style="grid-column:1/-1;">Charts unavailable (Chart.js did not load).</div>';
+    return;
+  }
+  const entries = visibleEntries();
+  const months = [...new Set(entries.map(e => auditMonthKey(e.date)).filter(Boolean))].sort().slice(-12);
+  if(!months.length){
+    wrap.innerHTML = '<div class="empty" style="grid-column:1/-1;">No entries to chart yet.</div>';
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="chart-card"><h3>Findings per month, by audit type</h3><div class="chart-box"><canvas id="chartMonthly"></canvas></div></div>
+    <div class="chart-card"><h3>Variance turnaround (avg days, sent to returned)</h3><div class="chart-box"><canvas id="chartTurnaround"></canvas></div></div>`;
+  Chart.defaults.color = '#8fa0b3';
+  Chart.defaults.borderColor = '#2e3947';
+  const colors = { chart: '#e8b840', unit: '#5fae82', sitter: '#6ea8d9', behavioral: '#b88ad9', pain: '#d9704f' };
+  const labels = months.map(auditMonthLabel);
+  const datasets = Object.keys(AUDIT_TYPES).map(type => ({
+    label: AUDIT_TYPES[type].short,
+    backgroundColor: colors[type],
+    data: months.map(m => entries.filter(e => e.type === type && auditMonthKey(e.date) === m).length)
+  })).filter(ds => ds.data.some(n => n > 0));
+  _charts.push(new Chart(document.getElementById('chartMonthly'), {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } }
+    }
+  }));
+  const turn = months.map(m => {
+    const days = entries
+      .filter(e => e.variance && e.variance.dateSent && e.variance.dateReceived && auditMonthKey(e.variance.dateReceived) === m)
+      .map(e => daysBetween(e.variance.dateSent, e.variance.dateReceived))
+      .filter(d => d !== null && d >= 0);
+    return days.length ? Math.round((days.reduce((a, b) => a + b, 0) / days.length) * 10) / 10 : null;
+  });
+  _charts.push(new Chart(document.getElementById('chartTurnaround'), {
+    type: 'line',
+    data: { labels, datasets: [{ label: 'Avg days', data: turn, borderColor: '#5fae82', backgroundColor: '#5fae82', spanGaps: true, tension: 0.25 }] },
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+  }));
+}
+
+// ----- emails (mailto: opens your mail app; nothing is sent automatically) -----
+function openMailto(to, cc, subject, body){
+  let url = 'mailto:' + to.join(',') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  if(cc.length) url += '&cc=' + encodeURIComponent(cc.join(','));
+  window.location.href = url;
+}
+async function emailVariance(id, opts){
+  const e = loadEntries().find(x => x.id === id);
+  if(!e) return;
+  const reminder = !!(opts && opts.reminder);
+  const staff = entryRequiredStaff(e);
+  if(!staff.length){ alert('Add at least one staff member to this entry first.'); return; }
+  await refreshCcDirectoryEmails();
+  const pending = entryReturnSummary(e).pending;
+  const targets = reminder && pending.length ? pending : staff;
+  const to = emailRecipients(targets.map(getCcDirectoryEmail));
+  const cc = emailRecipients(loadCC());
+  const typeLabel = (AUDIT_TYPES[e.type] && AUDIT_TYPES[e.type].label) || e.type;
+  const line = e.auditLineNumber ? ` (line ${e.auditLineNumber})` : '';
+  const links = targets.length > 1
+    ? targets.map(name => `${name}: ${acknowledgmentUrl(e.id, name)}`).join('\n')
+    : acknowledgmentUrl(e.id, targets[0]);
+  const due = varianceDueDate(e) || addDays(todayLocal(), getDueDays());
+  const body = `Hello,\n\n${reminder ? 'This is a reminder that an' : 'An'} audit variance needs your review and signed response:\n\n${typeLabel} · ${fmtDate(e.date)}${line}\n\n${links}\n\nPlease open ${targets.length > 1 ? 'your own link' : 'the link'}, enter your response, sign, and submit by ${fmtDate(due)}.\n\nThank you.`;
+  const subject = `${reminder ? 'Reminder: ' : ''}Audit variance follow-up - ${typeLabel} ${fmtDate(e.date)}`;
+  if(!to.length && !cc.length) alert('No staff email found in the CC directory. The email will open without a recipient.');
+  const entries = loadEntries();
+  const idx = entries.findIndex(x => x.id === id);
+  await createAcknowledgmentRequests(entries[idx]);
+  if(!reminder && idx > -1 && ((entries[idx].variance && entries[idx].variance.status) || 'not_sent') === 'not_sent'){
+    applySentState(entries[idx]);
+    logActivity('variance_sent', entries[idx], 'emailed');
+    saveEntries(entries);
+    pushAuditFinding(entries[idx]);
+    renderAll();
+  } else if(reminder){
+    logActivity('reminder', e, 'emailed');
+  }
+  openMailto(to, cc, subject, body);
+}
+function remindVariance(id){ return emailVariance(id, { reminder: true }); }
+
+async function emailEmployeeOpen(key){
+  const mine = visibleEntries().filter(e => {
+    if(e.status !== 'open') return false;
+    const name = entryRequiredStaff(e).find(n => staffNameKey(n) === key);
+    if(!name) return false;
+    const vs = (e.variance && e.variance.status) || 'not_sent';
+    if(vs === 'na') return false;
+    return !acknowledgmentForStaff(e.id, name);
+  });
+  if(!mine.length){ alert('No open variances waiting on this employee.'); return; }
+  const name = entryRequiredStaff(mine[0]).find(n => staffNameKey(n) === key);
+  await refreshCcDirectoryEmails();
+  const to = emailRecipients([getCcDirectoryEmail(name)]);
+  const cc = emailRecipients(loadCC());
+  const lines = mine.map(e => `${fmtDate(e.date)} · ${(AUDIT_TYPES[e.type] && AUDIT_TYPES[e.type].short) || e.type}${e.auditLineNumber ? ' · line ' + e.auditLineNumber : ''}: ${acknowledgmentUrl(e.id, name)}`);
+  const body = `Hello ${name},\n\nYou have ${mine.length} audit variance form${mine.length === 1 ? '' : 's'} to complete and sign. Please open each link, enter your response, sign, and submit:\n\n${lines.join('\n')}\n\nThank you.`;
+  const entries = loadEntries();
+  const touched = [];
+  entries.forEach(e => {
+    if(!mine.some(m => m.id === e.id)) return;
+    if(((e.variance && e.variance.status) || 'not_sent') === 'not_sent'){
+      applySentState(e);
+      logActivity('variance_sent', e, 'emailed (batch)');
+      touched.push(e);
+    }
+  });
+  if(touched.length){ saveEntries(entries); renderAll(); }
+  for(const e of mine){ await createAcknowledgmentRequests(e); }
+  touched.forEach(e => pushAuditFinding(e));
+  openMailto(to, cc, `Audit variance follow-up - ${mine.length} open item${mine.length === 1 ? '' : 's'}`, body);
+}
+
+// ----- monthly report (print / save as PDF) -----
+function reportTable(headers, rows){
+  if(!rows.length) return '<p class="none">None.</p>';
+  return `<table><thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${escapeHtml(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+function printMonthlyReport(){
+  const entries = entriesForSelectedMonth(visibleEntries());
+  if(!entries.length){ alert('No entries for this period.'); return; }
+  const period = selectedAuditMonth ? auditMonthLabel(selectedAuditMonth) : 'All logged months';
+  const typeCounts = Object.keys(AUDIT_TYPES).map(t => [AUDIT_TYPES[t].label, entries.filter(e => e.type === t).length]).filter(r => r[1] > 0);
+  const cats = new Map();
+  entries.forEach(e => categoryPairs(e).forEach(c => cats.set(c.label, (cats.get(c.label) || 0) + 1)));
+  const topCats = [...cats.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([l, n]) => [l, String(n)]);
+  const sent = entries.filter(e => ['sent', 'received'].includes((e.variance && e.variance.status) || '')).length;
+  const returned = entries.filter(e => e.variance && e.variance.status === 'received').length;
+  const overdue = entries.filter(isOverdue);
+  const open = entries.filter(e => e.status === 'open').length;
+  const days = entries
+    .map(e => (e.variance && e.variance.dateSent && e.variance.dateReceived) ? daysBetween(e.variance.dateSent, e.variance.dateReceived) : null)
+    .filter(d => d !== null && d >= 0);
+  const avg = days.length ? (days.reduce((a, b) => a + b, 0) / days.length).toFixed(1) : '—';
+  const staffRows = employeeStats(entries).map(r => [
+    r.name, String(r.findings), String(r.open),
+    r.sent ? `${r.returned}/${r.sent}` : '—',
+    String(r.overdue || 0),
+    [...r.cats.values()].filter(c => c.count >= 2).map(c => `${c.label} ×${c.count}`).join('; ')
+  ]);
+  const overdueRows = overdue.map(e => [
+    fmtDate(e.date), e.auditLineNumber || '—', (AUDIT_TYPES[e.type] && AUDIT_TYPES[e.type].short) || e.type,
+    entryReturnSummary(e).pending.join(', ') || (e.staff || []).join(', '), `${overdueDays(e)} days`
+  ]);
+  const html = `<!doctype html><html><head><title>Audit report - ${escapeHtml(period)}</title><style>
+    @page{size:letter;margin:.6in}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#152238;font-size:12px}
+    h1{font-family:Georgia,serif;color:#102d54;margin:0 0 4px;font-size:22px}.sub{color:#5b6878;margin:0 0 16px}
+    h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#102d54;border-bottom:2px solid #102d54;padding-bottom:4px;margin:20px 0 8px}
+    .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.kpi{border:1px solid #bdc7d2;border-radius:6px;padding:8px}.kpi b{display:block;font-size:20px;font-family:Georgia,serif}.kpi span{font-size:10px;text-transform:uppercase;color:#5b6878}
+    table{width:100%;border-collapse:collapse}th,td{border:1px solid #d7dee5;padding:5px 7px;text-align:left;vertical-align:top}th{background:#eef2f6;font-size:10px;text-transform:uppercase}.none{color:#5b6878}
+    </style></head><body>
+    <h1>3B/3C Audit Non-Compliance Report</h1><p class="sub">${escapeHtml(period)} · generated ${escapeHtml(fmtDate(todayLocal()))} · no patient identifiers</p>
+    <div class="kpis">
+      <div class="kpi"><b>${entries.length}</b><span>Findings</span></div>
+      <div class="kpi"><b>${open}</b><span>Open</span></div>
+      <div class="kpi"><b>${sent}</b><span>Variances sent</span></div>
+      <div class="kpi"><b>${returned}</b><span>Returned</span></div>
+      <div class="kpi"><b>${overdue.length}</b><span>Overdue</span></div>
+      <div class="kpi"><b>${avg}</b><span>Avg days to return</span></div>
+    </div>
+    <h2>By audit type</h2>${reportTable(['Type', 'Findings'], typeCounts.map(r => [r[0], String(r[1])]))}
+    <h2>Top non-compliance categories</h2>${reportTable(['Category', 'Count'], topCats)}
+    <h2>By employee</h2>${reportTable(['Employee', 'Findings', 'Open', 'Returned', 'Overdue', 'Repeat categories'], staffRows)}
+    <h2>Overdue variances</h2>${reportTable(['Audit date', 'Line #', 'Type', 'Awaiting', 'Overdue by'], overdueRows)}
+    <script>window.onload=function(){window.print()}<\/script></body></html>`;
+  const popup = window.open('', '_blank');
+  if(!popup){ alert('The report window was blocked. Allow pop-ups for this site and try again.'); return; }
+  popup.document.write(html);
+  popup.document.close();
+}
+
+// ----- unit review queue (shared rows with no unit are hidden until assigned) -----
+function loadIgnoredUnassigned(){
+  try { return JSON.parse(localStorage.getItem(IGNORED_KEY)) || []; } catch(e) { return []; }
+}
+function toggleUnassigned(){ unassignedOpen = !unassignedOpen; renderUnassigned(); }
+function renderUnassigned(){
+  const box = document.getElementById('unassignedBanner');
+  if(!box) return;
+  const list = unassignedShared;
+  if(!list.length){ box.innerHTML = ''; return; }
+  let html = `<div class="unassigned"><span>${list.length} Smartsheet finding${list.length === 1 ? ' has' : 's have'} no unit and ${list.length === 1 ? 'is' : 'are'} hidden from this tracker.</span><span style="display:flex;gap:8px;"><button class="ghost small" onclick="toggleUnassigned()">${unassignedOpen ? 'Hide' : 'Review'}</button><button class="ghost small" onclick="ignoreUnassigned()">Ignore all</button></span></div>`;
+  if(unassignedOpen){
+    const shown = list.slice(0, 25);
+    html += `<div class="unassigned-list"><table><thead><tr><th>Date</th><th>Type</th><th>Line #</th><th>Staff</th><th>Assign unit</th></tr></thead><tbody>${shown.map(e => {
+      const id = escapeHtml(e.id);
+      return `<tr><td>${escapeHtml(fmtDate(e.date))}</td><td>${escapeHtml((AUDIT_TYPES[e.type] && AUDIT_TYPES[e.type].short) || e.type)}</td><td>${escapeHtml(e.auditLineNumber || '—')}</td><td>${staffChips(e.staff)}</td><td class="row-actions"><button data-id="${id}" onclick="assignUnit(this.dataset.id,'3B')">3B</button><button data-id="${id}" onclick="assignUnit(this.dataset.id,'3C')">3C</button><button data-id="${id}" onclick="assignUnit(this.dataset.id,'3B/3C')">3B/3C</button><button data-id="${id}" onclick="ignoreUnassigned(this.dataset.id)">Not ours</button></td></tr>`;
+    }).join('')}</tbody></table>${list.length > shown.length ? `<p class="hint" style="padding:8px 14px;">Showing 25 of ${list.length}. Assign or ignore these to see the rest.</p>` : ''}</div>`;
+  }
+  box.innerHTML = html;
+}
+async function assignUnit(id, unit){
+  const e = unassignedShared.find(x => x.id === id);
+  if(!e) return;
+  const entry = { ...e, unit };
+  const ok = await pushAuditFinding(entry);
+  if(!ok){ alert('Could not save the unit. Check the connection and try again.'); return; }
+  logActivity('unit_assigned', entry, unit);
+  await loadSharedAuditFindings();
+}
+function ignoreUnassigned(id){
+  const ignored = new Set(loadIgnoredUnassigned());
+  if(id) ignored.add(id); else unassignedShared.forEach(e => ignored.add(e.id));
+  try { localStorage.setItem(IGNORED_KEY, JSON.stringify([...ignored])); } catch(e) {}
+  unassignedShared = unassignedShared.filter(e => !ignored.has(e.id));
+  renderUnassigned();
+}
+
+// ----- settings extras -----
+function renderSettingsExtras(){
+  const lb = document.getElementById('lookbackSelect');
+  if(lb) lb.value = String(getLookbackDays());
+  const dd = document.getElementById('dueDaysInput');
+  if(dd) dd.value = getDueDays();
+  const tr = document.getElementById('trashList');
+  if(tr){
+    const trash = loadTrash();
+    tr.innerHTML = trash.length ? trash.map(x => `<div class="log-row"><span>${escapeHtml(fmtDate(x.entry.date))} · ${escapeHtml((AUDIT_TYPES[x.entry.type] && AUDIT_TYPES[x.entry.type].short) || x.entry.type || '')}${x.entry.auditLineNumber ? ' · line ' + escapeHtml(x.entry.auditLineNumber) : ''}</span><button class="ghost small" data-id="${escapeHtml(x.entry.id)}" onclick="restoreFromTrash(this.dataset.id)">Restore</button></div>`).join('') : '<span class="missing-empty">Nothing deleted recently.</span>';
+  }
+  const lg = document.getElementById('activityLogList');
+  if(lg){
+    const log = loadLog().slice(0, 40);
+    lg.innerHTML = log.length ? log.map(x => `<div class="log-row"><span>${escapeHtml(new Date(x.t).toLocaleString('en-US'))} · ${escapeHtml(x.action)}${x.line ? ' · line ' + escapeHtml(x.line) : ''}${x.type ? ' · ' + escapeHtml(x.type) : ''}${x.detail ? ' · ' + escapeHtml(x.detail) : ''}</span></div>`).join('') : '<span class="missing-empty">No activity yet.</span>';
+  }
 }
 
 // ---------- init ----------
-seedIfMissing();
-applyRealChartData();
 renderAll();
 syncAllAuditFindings().then(()=>loadSharedAuditFindings());
 setInterval(()=>{ loadSharedAuditFindings(); }, SHARED_REFRESH_MS);

@@ -167,7 +167,8 @@ async function fetchSource(source) {
   const type = String(source.objectType || '').toLowerCase();
   const id = source.objectId || source.id;
   if (!id || !['sheet', 'report'].includes(type)) return null;
-  return smartsheet(`${type}s/${id}`);
+  // rowPermalink gives the tracker a real link to each Smartsheet row (sheets only).
+  return smartsheet(`${type}s/${id}${type === 'sheet' ? '?include=rowPermalink' : ''}`);
 }
 
 function rowToObject(sourceData, row) {
@@ -184,7 +185,7 @@ function rowToObject(sourceData, row) {
   return out;
 }
 
-function findingFromRow(row, fallbackType, sourceName, rowId) {
+function findingFromRow(row, fallbackType, sourceName, rowId, permalink) {
   const date = normalizeDate(pick(row, ['Audit Date', 'Date', 'Observation Date', 'Entry Date', 'Created Date']));
   if (!date) return null;
   const type = normalizeType(pick(row, ['Audit Type', 'Type', 'Audit', 'Form', 'Category']) || sourceName, fallbackType);
@@ -193,6 +194,8 @@ function findingFromRow(row, fallbackType, sourceName, rowId) {
   const tags = collectReasons(row, type);
   const staff = collectStaff(row);
   const status = pick(row, ['Status', 'Follow Up Status']).toLowerCase() === 'closed' ? 'closed' : 'open';
+  // variance_status is intentionally NOT included: the tracker owns it, and
+  // sending it here used to reset every variance back to "not sent" each run.
   return {
     id: `ss_${type}_${rowId}`,
     audit_type: type,
@@ -201,7 +204,7 @@ function findingFromRow(row, fallbackType, sourceName, rowId) {
     unit: inferUnit(unitText || context) || null,
     staff_names: staff,
     tags,
-    variance_status: null
+    row_url: permalink || null
   };
 }
 
@@ -230,6 +233,44 @@ async function resolveSources() {
   return sources;
 }
 
+const SUPABASE_HEADERS = {
+  apikey: SUPABASE_KEY,
+  Authorization: `Bearer ${SUPABASE_KEY}`
+};
+
+// Existing rows, so a sync never undoes work done in the tracker.
+async function fetchExisting() {
+  const existing = new Map();
+  for (let offset = 0; offset < 100000; offset += 1000) {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/audit_findings?select=id,status,unit,staff_names,row_url&order=id.asc&limit=1000&offset=${offset}`, {
+      headers: SUPABASE_HEADERS
+    });
+    if (!response.ok) {
+      throw new Error(`Supabase read ${response.status}: ${await response.text()}`);
+    }
+    const page = await response.json();
+    page.forEach(row => existing.set(row.id, row));
+    if (page.length < 1000) break;
+  }
+  return existing;
+}
+
+function preserveLocalWork(findings, existing) {
+  for (const finding of findings) {
+    const old = existing.get(finding.id);
+    if (!old) continue;
+    // Closed in the tracker stays closed.
+    if (old.status === 'closed') finding.status = 'closed';
+    // A unit assigned in the tracker survives rows Smartsheet has no unit for.
+    if (!finding.unit && old.unit) finding.unit = old.unit;
+    // Staff tagged in the tracker survive rows with no staff in Smartsheet.
+    if ((!finding.staff_names || !finding.staff_names.length) && Array.isArray(old.staff_names) && old.staff_names.length) {
+      finding.staff_names = old.staff_names;
+    }
+    if (!finding.row_url && old.row_url) finding.row_url = old.row_url;
+  }
+}
+
 async function upsertFindings(findings) {
   if (!findings.length) return 0;
   let ok = 0;
@@ -238,8 +279,7 @@ async function upsertFindings(findings) {
     const response = await fetch(`${SUPABASE_URL}/rest/v1/audit_findings?on_conflict=id`, {
       method: 'POST',
       headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
+        ...SUPABASE_HEADERS,
         'Content-Type': 'application/json',
         Prefer: 'resolution=merge-duplicates,return=minimal'
       },
@@ -264,13 +304,14 @@ async function main() {
     const data = await fetchSource(source);
     if (!data) continue;
     for (const row of data.rows || []) {
-      const mapped = findingFromRow(rowToObject(data, row), source.type, data.name || source.name || '', row.id);
+      const mapped = findingFromRow(rowToObject(data, row), source.type, data.name || source.name || '', row.id, row.permalink);
       if (mapped) findings.push(mapped);
     }
   }
 
   const unique = [...new Map(findings.map(finding => [finding.id, finding])).values()]
     .sort((a, b) => String(b.finding_date).localeCompare(String(a.finding_date)));
+  preserveLocalWork(unique, await fetchExisting());
   const synced = await upsertFindings(unique);
   console.log(JSON.stringify({ ok: true, sources: sources.length, rows: unique.length, synced }, null, 2));
 }
