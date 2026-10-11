@@ -2056,7 +2056,7 @@ function showCoachingDirectory(){
     dialog.id = 'coachingDirectoryDialog';
     dialog.setAttribute('aria-labelledby', 'coachingDirectoryTitle');
     dialog.style.cssText = 'background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;width:min(720px,90vw);max-height:85vh;padding:22px;box-sizing:border-box;';
-    dialog.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><h3 id="coachingDirectoryTitle">Coaching directory</h3><button type="button" id="closeCoachingDirectory">Close</button></div><p>Select any text to copy it, or use a Copy button.</p><div id="coachingDirectoryItems"></div><p id="coachingCopyStatus" role="status" aria-live="polite"></p>';
+    dialog.innerHTML = '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><h3 id="coachingDirectoryTitle">Coaching directory</h3><button type="button" id="closeCoachingDirectory">Close</button></div><p>Use Add to audit form to insert coaching directly. Copy buttons are also available.</p><div id="coachingDirectoryItems"></div><p id="coachingCopyStatus" role="status" aria-live="polite"></p>';
     document.body.appendChild(dialog);
     dialog.querySelector('#closeCoachingDirectory').onclick = () => dialog.close();
   }
@@ -2093,7 +2093,31 @@ function showCoachingDirectory(){
       }
       status.textContent = copied ? 'Coaching copied. Paste it where needed.' : 'Text selected. Press Ctrl+C (or Command+C) to copy.';
     };
-    section.append(label, field, button);
+    const insert = document.createElement('button');
+    insert.type = 'button';
+    insert.textContent = title === 'Full coaching directory' ? 'Add all to audit form' : 'Add to audit form';
+    insert.style.marginLeft = '8px';
+    insert.disabled = !document.getElementById('fIssue');
+    insert.onclick = () => {
+      const target = document.getElementById('fIssue');
+      if(!target) return;
+      const selections = title === 'Full coaching directory'
+        ? COACHING_DIRECTORY.map(item => item.title + ':\n' + item.coaching)
+        : [text];
+      const additions = selections.filter(value => !target.value.includes(value));
+      if(additions.length){
+        const base = target.value.trimEnd();
+        target.value = base + (base ? '\n\n' : '') +
+          (issueIncludesCoaching(base) ? '' : 'Coaching expectations:\n') +
+          additions.join('\n\n');
+        target.dispatchEvent(new Event('input', {bubbles:true}));
+        renderCoachingPreview();
+      }
+      dialog.close();
+      target.focus();
+      target.setSelectionRange(target.value.length, target.value.length);
+    };
+    section.append(label, field, button, insert);
     items.appendChild(section);
   }
   addCopyField('Full coaching directory', COACHING_DIRECTORY.map(item => item.title + ':\n' + item.coaching).join('\n\n'), 8);
