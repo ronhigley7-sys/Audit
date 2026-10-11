@@ -1909,13 +1909,19 @@ async function checkAckLink(){
   ` : '';
   content.innerHTML = `
     <h2 style="margin-top:0;">Variance Follow-up</h2>
-    <p style="color:#9aa4b2;">Review the audit summary below. Complete the response, sign it, and submit it back to leadership.</p>
+    <section id="staffReviewNotice" aria-label="Supportive review notice" style="background:#1b232d;border:1px solid #4a3f20;border-left:4px solid #e8b840;border-radius:8px;padding:14px 16px;margin:14px 0 20px;color:#e7ecf1;line-height:1.6;">
+      <p style="margin:0 0 10px;">This notice is <strong>not a disciplinary write-up</strong>. It identifies a missed opportunity related to documentation or patient safety and is intended to support learning and improvement.</p>
+      <p style="margin:0 0 10px;">Please review the information provided and add any details that may help explain what happened, including barriers, workflow challenges, or gaps in education or training. Your feedback will help us identify the support needed to prevent similar issues.</p>
+      <p style="margin:0 0 10px;">If you have specific questions, please reach out to me so we can review the information together in person.</p>
+      <p style="margin:0 0 10px;">Please sign and return this notice to me. Your signature acknowledges that you have reviewed the information; it does not necessarily indicate agreement with the findings.</p>
+      <p style="margin:0;">Thank you for your feedback and commitment to safe patient care.</p>
+    </section>
     <div style="margin:16px 0 20px;">${acknowledgmentDetailsHtml(entry)}</div>
 
     ${staffSelectHtml}
 
     <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Your response / explanation</label>
-    <textarea id="ackComment" placeholder="Explain what happened, barriers, corrective action, or your response to the finding." style="width:100%;min-height:130px;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;font:15px Arial,sans-serif;">${escapeHtml(defaultComment)}</textarea>
+    <textarea id="ackComment" placeholder="Share what happened, any barriers or workflow challenges, and any education or training needs." style="width:100%;min-height:130px;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;font:15px Arial,sans-serif;">${escapeHtml(defaultComment)}</textarea>
 
     <label style="display:block;font-size:11px;color:#8fa0b3;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Printed name for record</label>
     <input id="ackSignedName" type="text" value="${escapeHtml(defaultName)}" placeholder="Confirm your full name" style="width:100%;background:#0f151c;border:1px solid #2e3947;color:#e7ecf1;padding:10px;border-radius:7px;margin-bottom:14px;">
@@ -1931,7 +1937,7 @@ async function checkAckLink(){
 
     <label style="display:flex;gap:8px;align-items:flex-start;color:#cbd5e1;font-size:13px;line-height:1.35;margin-bottom:16px;">
       <input id="ackConfirm" type="checkbox" style="margin-top:2px;">
-      <span>I understand this audit finding and I am submitting my signed response/variance form to leadership.</span>
+      <span>I acknowledge that I have reviewed this information and am submitting my signed response to leadership. My signature does not necessarily indicate agreement with the findings.</span>
     </label>
 
     <button id="ackSubmitButton" onclick="submitAcknowledgment('${escapeHtml(ackId)}')" style="background:#e8b840;color:#241d09;border:none;font-weight:700;padding:10px 16px;border-radius:7px;cursor:pointer;">${alreadyReturned ? 'Update signed response' : 'Submit signed variance response'}</button>
