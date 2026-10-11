@@ -2465,7 +2465,7 @@ function renderReturnedForms(){
     const employee = (ack && (ack.signed_name || ack.staff_name)) || record.staffName || (e.staff || []).join(', ') || '—';
     const returnedDate = ack && ack.signed_at ? String(ack.signed_at).slice(0,10) : (e.variance && e.variance.dateReceived);
     const response = ack && ack.comment ? ack.comment : (e.variance && e.variance.receivedAutomatically ? 'Signed acknowledgment received' : 'Returned outside the online acknowledgment link');
-    return `<tr><td>${fmtDate(returnedDate)}</td><td>${escapeHtml(employee)}</td><td>${fmtDate(e.date)}</td><td><span class="type-pill">${escapeHtml(AUDIT_TYPES[e.type]?.short || e.type)}</span></td><td>${escapeHtml(response)}</td><td class="row-actions"><button onclick="printReturnedForm(${JSON.stringify(e.id)}, ${JSON.stringify(record.staffKey)})">View / Print</button></td></tr>`;
+    return `<tr><td>${fmtDate(returnedDate)}</td><td>${escapeHtml(employee)}</td><td>${fmtDate(e.date)}</td><td><span class="type-pill">${escapeHtml(AUDIT_TYPES[e.type]?.short || e.type)}</span></td><td>${escapeHtml(response)}</td><td class="row-actions"><button onclick="${escapeHtml(`printReturnedForm(${JSON.stringify(e.id)}, ${JSON.stringify(record.staffKey)})`)}">View / Print</button></td></tr>`;
   }).join('')}</tbody></table>`;
 }
 
