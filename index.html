@@ -42,6 +42,7 @@
   .return-alert{display:none;background:rgba(95,174,130,.12);border:1px solid rgba(95,174,130,.45);color:#b9e3ca;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:13px;align-items:center;justify-content:space-between;gap:12px;}
   .return-alert.show{display:flex;}
   .panel-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .panel-tools select{background:var(--ink);border:1px solid var(--line);color:var(--text);padding:7px 10px;border-radius:6px;font:12px var(--sans);min-width:170px;}
   .line-search{background:var(--ink);border:1px solid var(--line);color:var(--text);padding:7px 10px;border-radius:6px;font:12px var(--sans);width:190px;}
 
   .tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;}
@@ -168,7 +169,7 @@
   <div>
     <p class="eyebrow">3B / 3C · Unit Audits</p>
     <h1>Chart &amp; Unit Audit Non-Compliance Tracker</h1>
-    <p class="sub">Chart Audits, Sitter Audits, Behavioral Health Audits, and Pain Reassessment Audits from Smartsheet — auto-refreshed.</p>
+    <p class="sub">Chart Audits, Sitter Audits, Behavioral Health Audits, and Pain Reassessment Audits from Smartsheet — auto-refreshed. Per-staff return build 2026-10-12 22:55.</p>
   </div>
   <div class="header-actions">
     <button class="ghost" onclick="refreshSharedAuditData()">Refresh</button>
@@ -214,7 +215,13 @@
   <div class="panel" id="returnedPanel">
     <div class="panel-head">
       <h2>Returned Variance Forms</h2>
-      <div class="panel-tools"><button class="ghost small" onclick="printAllReturned()">Print all returned</button></div>
+      <div class="panel-tools">
+        <select id="returnedMonthFilter" aria-label="Filter returned forms by audit month" onchange="setReturnedMonth(this.value)">
+          <option value="">All returned months</option>
+        </select>
+        <button class="ghost small" onclick="syncLocalReturnedForms()">Sync returned now</button>
+        <button class="ghost small" onclick="printAllReturned()">Print shown returned</button>
+      </div>
     </div>
     <div id="returnedWrap"></div>
   </div>
@@ -273,7 +280,7 @@
       </div>
       <div class="field">
         <label>Auto Smartsheet / CC sync</label>
-        <p class="hint" style="margin-bottom:8px;">Pulls de-identified audit summaries from the Smartsheet sync table and sends tagged staff/status updates back so CC employee tracking works. Patient name, MR#, visit number, and full issue descriptions are not sent to CC by this page.</p>
+        <p class="hint" style="margin-bottom:8px;">Pulls de-identified audit summaries from the Smartsheet sync table for the last 12 months and sends tagged staff/status updates back so CC employee tracking works. Patient name, MR#, visit number, and full issue descriptions are not sent to CC by this page.</p>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <button class="ghost small" onclick="syncAllAuditFindings()">Sync current entries to CC now</button>
           <span id="auditSyncStatus" class="hint" style="margin:0;"></span>
@@ -286,7 +293,7 @@
       </div>
       <div class="field">
         <label>Work computer PHI display</label>
-        <p class="hint" style="margin-bottom:8px;">Patient and MR# values only display when this browser is trusted and the PHI password is unlocked for the current session. The shared audit list stays de-identified.</p>
+        <p class="hint" style="margin-bottom:8px;">Patient and MR# values only display when this browser is trusted and the PHI password is unlocked for the current session. This password/trust is saved on this browser only, so each work computer must be trusted separately. The shared audit list stays de-identified.</p>
         <div class="field-row">
           <div class="field" style="margin-bottom:0;">
             <input type="password" id="phiPasswordInput" autocomplete="current-password" placeholder="Enter PHI password">
@@ -311,6 +318,23 @@
           <span id="auditImportStatus" class="hint" style="margin:0;"></span>
         </div>
         <p class="hint">Use this only as a backup if the automatic Smartsheet sync has not run yet. The shared list stores date, audit type, unit, staff names, status, line number, and category/reason tags.</p>
+      </div>
+      <div class="field">
+        <label>Local detail backup</label>
+        <p class="hint" style="margin-bottom:8px;">This browser now saves a local backup before shared refreshes and CSV imports. Use this if a refresh replaces detailed issue text with a generic Smartsheet summary.</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="ghost small" type="button" onclick="downloadLocalDetailBackup()">Export detail backup</button>
+          <button class="ghost small" type="button" onclick="mergeLatestEntriesBackup()">Merge newest backup details</button>
+          <button class="ghost small" type="button" onclick="restoreLatestEntriesBackup()">Restore newest local backup</button>
+          <button class="ghost small" type="button" onclick="backupEntries('Manual backup from Settings'); renderBackupStatus();">Save backup now</button>
+          <span id="entriesBackupStatus" class="hint" style="margin:0;"></span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+          <input type="file" id="localDetailBackupFile" accept=".json,application/json">
+          <button class="ghost small" type="button" onclick="importLocalDetailBackup()">Import/merge detail backup</button>
+          <span id="localDetailImportStatus" class="hint" style="margin:0;"></span>
+        </div>
+        <p class="hint">Export is de-identified: patient and MR# are removed. Use this on any computer that still has the correct details, then import it here.</p>
       </div>
     </div>
     <div class="modal-foot">
@@ -638,6 +662,7 @@ let _ackSignatureHasData = false;
 let _ackSignatureDrawing = false;
 let auditLineSearch = '';
 let selectedAuditMonth = '';
+let selectedReturnedMonth = '';
 
 // ---------- storage helpers ----------
 function loadEntries(){ try{ return JSON.parse(localStorage.getItem(ENTRIES_KEY)) || []; }catch(e){ return []; } }
@@ -650,6 +675,9 @@ function escapeHtml(value){
   return String(value == null ? '' : value).replace(/[&<>"']/g, ch=>({
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
   })[ch]);
+}
+function jsLiteral(value){
+  return JSON.stringify(String(value == null ? '' : value)).replace(/</g, '\\u003C');
 }
 
 // ---------- CC staff directory ----------
@@ -824,7 +852,7 @@ const AUDIT_SB_CONFIG = {
   url: 'https://xnsdvdfceflmagfhpycw.supabase.co',
   key: 'sb_publishable_X3VPp9di5Ve-fw_uJJTUyQ_Ztzi6mds'
 };
-const SHARED_LOOKBACK_DAYS = 60;
+const SHARED_LOOKBACK_DAYS = 365;
 const SHARED_REFRESH_MS = 60000;
 let lastAuditSyncError = '';
 
@@ -968,13 +996,233 @@ function entryFromAuditFinding(row){
   };
 }
 
+function isGenericIssueText(value){
+  const text = String(value || '').trim().toLowerCase();
+  if(!text) return true;
+  return [
+    'specific variance not recorded in smartsheet',
+    'reason not recorded in smartsheet',
+    'compliance issue noted',
+    'returned variance form. audit details are not loaded on this device.'
+  ].includes(text);
+}
+
+function chooseDetailedIssue(existingIssue, incomingIssue){
+  const existing = String(existingIssue || '').trim();
+  const incoming = String(incomingIssue || '').trim();
+  if(existing && !isGenericIssueText(existing) && (isGenericIssueText(incoming) || existing.length >= incoming.length)) return existing;
+  if(incoming && !isGenericIssueText(incoming)) return incoming;
+  return existing || incoming || '';
+}
+
+function hasLocalAuditDetails(entry){
+  if(!entry) return false;
+  if(entry.patient || entry.mrn) return true;
+  if(entry.reporter) return true;
+  if(entry.issue && !isGenericIssueText(entry.issue)) return true;
+  if(entry.items && Object.values(entry.items).some(Boolean)) return true;
+  return false;
+}
+
+const ENTRIES_BACKUP_KEY = 'audit_entries_backups_v1';
+
+function backupEntries(reason){
+  try {
+    const entries = loadEntries();
+    if(!entries.length) return;
+    const backups = JSON.parse(localStorage.getItem(ENTRIES_BACKUP_KEY) || '[]');
+    backups.unshift({ reason: reason || 'backup', at: new Date().toISOString(), entries });
+    localStorage.setItem(ENTRIES_BACKUP_KEY, JSON.stringify(backups.slice(0, 15)));
+  } catch(e) { /* backup is best effort */ }
+}
+
+function loadEntriesBackups(){
+  try {
+    const backups = JSON.parse(localStorage.getItem(ENTRIES_BACKUP_KEY) || '[]');
+    return Array.isArray(backups) ? backups : [];
+  } catch(e) {
+    return [];
+  }
+}
+
+function renderBackupStatus(){
+  const status = document.getElementById('entriesBackupStatus');
+  if(!status) return;
+  const backups = loadEntriesBackups();
+  if(!backups.length){
+    status.textContent = 'No local backups saved yet.';
+    return;
+  }
+  const latest = backups[0];
+  const count = Array.isArray(latest.entries) ? latest.entries.length : 0;
+  const when = latest.at ? new Date(latest.at).toLocaleString('en-US') : 'unknown time';
+  status.textContent = `${backups.length} backup(s). Newest: ${count} entries at ${when}.`;
+}
+
+function restoreLatestEntriesBackup(){
+  const backups = loadEntriesBackups();
+  if(!backups.length){
+    alert('No local backups are available on this browser yet.');
+    renderBackupStatus();
+    return;
+  }
+  const latest = backups[0];
+  const count = Array.isArray(latest.entries) ? latest.entries.length : 0;
+  const when = latest.at ? new Date(latest.at).toLocaleString('en-US') : 'unknown time';
+  if(!confirm(`Restore the newest local backup from ${when} with ${count} entries? This only changes this browser until you sync again.`)) return;
+  backupEntries('Before restoring local backup');
+  saveEntries(latest.entries || []);
+  renderAll();
+  renderBackupStatus();
+  showTemporaryStatus('Local audit details restored from backup.');
+}
+
+function deidentifiedEntry(entry){
+  return {
+    id: entry.id,
+    type: entry.type,
+    date: entry.date,
+    status: entry.status,
+    auditLineNumber: entry.auditLineNumber || '',
+    patient: '',
+    mrn: '',
+    context: entry.context || '',
+    unit: entry.unit || '',
+    items: entry.items || {},
+    issue: entry.issue || '',
+    tags: entry.tags || [],
+    staff: entry.staff || [],
+    over24h: !!entry.over24h,
+    reporter: entry.reporter || '',
+    variance: entry.variance || {},
+    sharedSummaryOnly: false
+  };
+}
+
+function deidentifiedEntries(entries){
+  return (entries || []).map(deidentifiedEntry);
+}
+
+function downloadLocalDetailBackup(){
+  const payload = {
+    kind: 'audit-detail-backup-v1',
+    exportedAt: new Date().toISOString(),
+    entries: deidentifiedEntries(loadEntries())
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `audit-detail-backup-${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  showTemporaryStatus('De-identified detail backup exported.');
+}
+
+function backupEntryFingerprint(entry){
+  return auditLineFingerprint(entry) || [
+    normalizeAuditType(entry && entry.type || 'chart'),
+    String(entry && entry.date || '').slice(0,10),
+    String(entry && entry.unit || entry && entry.context || '').trim().toLowerCase(),
+    ((entry && entry.staff) || []).map(staffNameKey).filter(Boolean).sort().join('|')
+  ].join('|');
+}
+
+function mergeBackupEntry(existing, backup){
+  if(!existing) return { ...backup, patient: '', mrn: '', sharedSummaryOnly: false };
+  const merged = {
+    ...existing,
+    issue: chooseDetailedIssue(existing.issue, backup.issue),
+    tags: backup.tags && backup.tags.length ? backup.tags : (existing.tags || []),
+    staff: backup.staff && backup.staff.length ? backup.staff : (existing.staff || []),
+    items: backup.items && Object.keys(backup.items).length ? { ...(existing.items || {}), ...backup.items } : (existing.items || {}),
+    context: existing.context || backup.context || '',
+    unit: existing.unit || backup.unit || '',
+    auditLineNumber: existing.auditLineNumber || backup.auditLineNumber || '',
+    variance: mergeVarianceDetails(existing.variance, backup.variance),
+    sharedSummaryOnly: false
+  };
+  if(backup.variance && Array.isArray(backup.variance.returnedNames) && backup.variance.returnedNames.length){
+    merged.variance.returnedNames = backup.variance.returnedNames;
+  }
+  return merged;
+}
+
+function mergeDetailBackupEntries(sourceEntries, reason){
+  const incoming = (sourceEntries || []).filter(Boolean).map(deidentifiedEntry);
+  if(!incoming.length) return { merged: 0, added: 0 };
+  backupEntries(reason || 'Before merging detail backup');
+  const entries = loadEntries();
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const byFingerprint = new Map();
+  entries.forEach(entry => {
+    const fp = backupEntryFingerprint(entry);
+    if(fp && !byFingerprint.has(fp)) byFingerprint.set(fp, entry);
+  });
+  let mergedCount = 0;
+  let addedCount = 0;
+  incoming.forEach(backup => {
+    const fp = backupEntryFingerprint(backup);
+    const existing = byId.get(backup.id) || (fp ? byFingerprint.get(fp) : null);
+    const next = mergeBackupEntry(existing, backup);
+    if(existing){
+      byId.delete(existing.id);
+      mergedCount++;
+    } else {
+      addedCount++;
+    }
+    byId.set(next.id || backup.id || `backup_${Date.now()}_${addedCount}`, next);
+  });
+  saveEntries(Array.from(byId.values()));
+  renderAll();
+  return { merged: mergedCount, added: addedCount };
+}
+
+function mergeLatestEntriesBackup(){
+  const backups = loadEntriesBackups();
+  if(!backups.length){
+    alert('No local backups are available on this browser yet.');
+    renderBackupStatus();
+    return;
+  }
+  const latest = backups[0];
+  const result = mergeDetailBackupEntries(deidentifiedEntries(latest.entries || []), 'Before merging newest local backup');
+  renderBackupStatus();
+  showTemporaryStatus(`Merged ${result.merged} entries and added ${result.added} from local backup.`);
+}
+
+async function importLocalDetailBackup(){
+  const input = document.getElementById('localDetailBackupFile');
+  const status = document.getElementById('localDetailImportStatus');
+  const file = input && input.files && input.files[0];
+  if(!file){
+    alert('Choose a detail backup JSON file first.');
+    return;
+  }
+  try {
+    if(status) status.textContent = 'Importing detail backup...';
+    const parsed = JSON.parse(await file.text());
+    const entries = Array.isArray(parsed) ? parsed : parsed.entries;
+    if(!Array.isArray(entries) || !entries.length) throw new Error('No entries found in that backup file.');
+    const result = mergeDetailBackupEntries(entries, 'Before importing detail backup');
+    renderBackupStatus();
+    if(status) status.textContent = `Merged ${result.merged}; added ${result.added}.`;
+    showTemporaryStatus(`Detail backup imported. Merged ${result.merged}; added ${result.added}.`);
+  } catch(error) {
+    if(status) status.textContent = `Import failed: ${error.message}`;
+    alert('Could not import that detail backup: ' + error.message);
+  }
+}
+
 function mergeSharedEntries(localEntries, sharedEntries){
   const merged = new Map();
   sharedEntries.forEach(entry => merged.set(entry.id, entry));
   localEntries.forEach(entry => {
     const shared = merged.get(entry.id);
     if(shared){
-      const keepLocalDetails = !(entry.sharedSummaryOnly && !entry.patient && !entry.mrn);
+      const keepLocalDetails = hasLocalAuditDetails(entry);
       merged.set(entry.id, {
         ...shared,
         ...(keepLocalDetails ? entry : {}),
@@ -982,11 +1230,8 @@ function mergeSharedEntries(localEntries, sharedEntries){
         auditLineNumber: shared.auditLineNumber || entry.auditLineNumber || '',
         patient: keepLocalDetails ? entry.patient : shared.patient,
         mrn: keepLocalDetails ? entry.mrn : shared.mrn,
-        issue: keepLocalDetails ? (entry.issue || shared.issue) : shared.issue,
-        variance: {
-          ...(keepLocalDetails ? (entry.variance || {}) : {}),
-          status: (shared.variance && shared.variance.status) || (entry.variance && entry.variance.status) || 'not_sent'
-        },
+        issue: chooseDetailedIssue(entry.issue, shared.issue),
+        variance: mergeVarianceDetails(entry.variance, shared.variance),
         tags: (keepLocalDetails && entry.tags && entry.tags.length) ? entry.tags : shared.tags,
         staff: (keepLocalDetails && entry.staff && entry.staff.length) ? entry.staff : shared.staff,
         sharedSummaryOnly: !keepLocalDetails || !!(entry.sharedSummaryOnly && !entry.patient && !entry.mrn)
@@ -998,41 +1243,37 @@ function mergeSharedEntries(localEntries, sharedEntries){
   return Array.from(merged.values());
 }
 
-async function fetchAllAuditRows(url){
-  const rows = [];
-  let offset = 0;
-  while(true){
-    const response = await fetch(url + '&limit=500&offset=' + offset, {
-      headers: { apikey: AUDIT_SB_CONFIG.key }
-    });
-    if(!response.ok) throw new Error('Audit data could not be loaded (' + response.status + ').');
-    const page = await response.json();
-    if(!Array.isArray(page)) throw new Error('Invalid audit data response.');
-    rows.push(...page);
-    if(!page.length) break;
-    offset += page.length;
-  }
-  return rows;
+function normalizeVarianceStatus(status){
+  const value = String(status || '').trim();
+  return ['not_sent','sent','received','na'].includes(value) ? value : 'not_sent';
 }
 
-async function loadReturnedAuditEntries(rows){
-  const entries = loadEntries();
-  const known = new Set(entries.map(entry => entry.id));
-  const missing = [...new Set(rows.map(row => row.finding_id).filter(id => id && !known.has(id)))];
-  for(let i = 0; i < missing.length; i += 50){
-    const ids = missing.slice(i, i + 50).map(id => '"' + String(id).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',');
-    const findings = await fetchAllAuditRows(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&id=in.${encodeURIComponent('(' + ids + ')')}&order=id.asc`);
-    findings.map(entryFromAuditFinding).filter(is3B3CUnit).forEach(entry => {
-      if(!known.has(entry.id)){ entries.push(entry); known.add(entry.id); }
-    });
-  }
-  saveEntries(entries);
+function strongerVarianceStatus(localStatus, sharedStatus){
+  const rank = { not_sent: 0, na: 1, sent: 2, received: 3 };
+  const local = normalizeVarianceStatus(localStatus);
+  const shared = normalizeVarianceStatus(sharedStatus);
+  return rank[local] > rank[shared] ? local : shared;
+}
+
+function mergeVarianceDetails(localVariance, sharedVariance){
+  const local = localVariance || {};
+  const shared = sharedVariance || {};
+  return {
+    ...shared,
+    ...local,
+    status: strongerVarianceStatus(local.status, shared.status)
+  };
 }
 
 async function loadSharedAuditFindings(){
   try {
+    backupEntries('Before shared audit refresh');
     const cutoff = lookbackDate(SHARED_LOOKBACK_DAYS);
-    const rows = await fetchAllAuditRows(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast,id.asc`);
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key }
+    });
+    if(!r.ok) return;
+    const rows = await r.json();
     const sharedEntries = rows.map(entryFromAuditFinding).filter(is3B3CUnit);
     saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
     await loadAcknowledgmentReturns(false);
@@ -1045,25 +1286,39 @@ async function loadSharedAuditFindings(){
 // Received and supplies the employee response/signature for viewing/printing.
 async function loadAcknowledgmentReturns(renderAfter){
   try {
-    const rows = await fetchAllAuditRows(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=id,finding_id,staff_name,status,comment,signed_name,signed_at,requested_at&status=eq.acknowledged&order=signed_at.desc.nullslast,id.desc`);
-    await loadReturnedAuditEntries(rows);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - SHARED_LOOKBACK_DAYS);
+    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=id,finding_id,staff_name,status,comment,signed_name,signed_at,requested_at&status=eq.acknowledged&signed_at=gte.${encodeURIComponent(cutoff.toISOString())}&order=signed_at.desc.nullslast`, {
+      headers: { apikey: AUDIT_SB_CONFIG.key }
+    });
+    if(!r.ok) return;
+    const rows = await r.json();
     const signatureMaps = await loadSignatureReturns();
     signatureByFinding = signatureMaps.byFinding;
     signatureByFindingStaff = signatureMaps.byStaff;
     acknowledgmentByFinding = new Map();
     acknowledgmentByFindingStaff = new Map();
     acknowledgmentRowsByFinding = new Map();
-    const seenStaffRows = new Set();
+    const entryById = new Map(loadEntries().map(entry => [entry.id, entry]));
+    const groupedRows = new Map();
     rows.forEach(row => {
       if(!row.finding_id) return;
+      if(!groupedRows.has(row.finding_id)) groupedRows.set(row.finding_id, []);
+      groupedRows.get(row.finding_id).push(row);
+    });
+    const seenStaffRows = new Set();
+    groupedRows.forEach((findingRows, findingId) => {
+      const entry = entryById.get(findingId) || { id: findingId, staff: [] };
+      newestAcknowledgmentRows(findingRows, entry).forEach(row => {
       if(!acknowledgmentByFinding.has(row.finding_id)) acknowledgmentByFinding.set(row.finding_id, row);
-      const staffKey = acknowledgmentStaffKey(row.finding_id, rowStaffName(row));
+      const staffKey = acknowledgmentRowKey(row, entry);
       if(staffKey && !acknowledgmentByFindingStaff.has(staffKey)) acknowledgmentByFindingStaff.set(staffKey, row);
       const rowKey = staffKey || (row.finding_id + '::row_' + row.id);
       if(seenStaffRows.has(rowKey)) return;
       seenStaffRows.add(rowKey);
       if(!acknowledgmentRowsByFinding.has(row.finding_id)) acknowledgmentRowsByFinding.set(row.finding_id, []);
       acknowledgmentRowsByFinding.get(row.finding_id).push(row);
+      });
     });
     const entries = loadEntries();
     let changed = false;
@@ -1083,10 +1338,7 @@ async function loadAcknowledgmentReturns(renderAfter){
     });
     if(changed) saveEntries(entries);
     if(renderAfter !== false) renderAll();
-  } catch(e) {
-    console.warn('Returned variance forms refresh failed:', e);
-    showTemporaryStatus('Returned forms could not fully refresh. Tap Refresh to retry.');
-  }
+  } catch(e) { /* returned forms still show without the response details */ }
 }
 
 async function refreshSharedAuditData(){
@@ -1131,8 +1383,110 @@ async function syncAllAuditFindings(){
     if (await pushAuditFinding(entries[i])) ok++;
     if (statusEl) statusEl.textContent = `Syncing ${i+1} / ${entries.length}...`;
   }
-  if (statusEl) statusEl.textContent = `Synced ${ok} / ${entries.length} 3B/3C entries to CC.`;
+  const returnedSync = await syncLocalReturnedForms(false);
+  if (statusEl) statusEl.textContent = `Synced ${ok} / ${entries.length} 3B/3C entries to CC. Returned forms synced ${returnedSync.ok} / ${returnedSync.total}.`;
   return ok;
+}
+
+async function fetchAcknowledgmentsForFinding(findingId){
+  if(!findingId) return [];
+  const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=id,finding_id,staff_name,status,comment,signed_name,signed_at,requested_at&finding_id=eq.${encodeURIComponent(findingId)}`, {
+    headers: { apikey: AUDIT_SB_CONFIG.key }
+  });
+  if(!r.ok) throw new Error(await r.text() || `Return lookup failed (${r.status})`);
+  return await r.json();
+}
+
+function returnedStaffNamesForSync(entry){
+  const rows = acknowledgmentRowsForEntry(entry);
+  if(rows.length) return [...new Set(newestAcknowledgmentRows(rows, entry).map(row => acknowledgmentRowStaffName(row, entry)).filter(Boolean))];
+  const variance = entry && entry.variance ? entry.variance : {};
+  const savedNames = Array.isArray(variance.returnedNames) ? variance.returnedNames.map(name=>String(name || '').trim()).filter(Boolean) : [];
+  if(savedNames.length) return [...new Set(savedNames)];
+  if(variance.status !== 'received' && !(variance.dateReceived && entryRequiredStaff(entry).length === 1)) return [];
+  const required = entryRequiredStaff(entry);
+  if(required.length) return required;
+  const joined = ((entry && entry.staff) || []).map(name=>String(name || '').trim()).filter(Boolean).join(', ');
+  return [joined || 'Manually returned'];
+}
+
+function returnedDateForSync(entry){
+  const summary = entryReturnSummary(entry);
+  const value = summary.latestDate || (entry.variance && entry.variance.dateReceived) || '';
+  return String(value || new Date().toISOString().slice(0,10)).slice(0,10);
+}
+
+async function syncAcknowledgmentRow(entry, staffName){
+  const name = String(staffName || '').trim() || 'Manually returned';
+  const signedDate = returnedDateForSync(entry);
+  const signedAt = `${signedDate}T12:00:00.000Z`;
+  const ackRow = {
+    finding_id: entry.id,
+    staff_name: name,
+    status: 'acknowledged',
+    comment: 'Returned form marked received by leadership.',
+    signed_name: name,
+    signed_at: signedAt
+  };
+  const existingRows = await fetchAcknowledgmentsForFinding(entry.id);
+  const staffKey = acknowledgmentRowKey(ackRow, entry);
+  const existing = newestAcknowledgmentRows(existingRows, entry).find(row => acknowledgmentRowKey(row, entry) === staffKey);
+  const url = existing && existing.id
+    ? `${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?id=eq.${encodeURIComponent(existing.id)}`
+    : `${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`;
+  const r = await fetch(url, {
+    method: existing && existing.id ? 'PATCH' : 'POST',
+    headers: { apikey: AUDIT_SB_CONFIG.key, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify(ackRow)
+  });
+  if(!r.ok) throw new Error(await r.text() || `Return sync failed (${r.status})`);
+  return ackRow;
+}
+
+async function syncLocalReturnedForms(showDone=true){
+  const entries = loadEntries().filter(entry => is3B3CUnit(entry) || hasReturnedForms(entry));
+  const targets = [];
+  entries.forEach(entry => {
+    returnedStaffNamesForSync(entry).forEach(staffName => targets.push({ entry, staffName }));
+  });
+  let ok = 0;
+  let findingOk = 0;
+  const statusEl = document.getElementById('auditSyncStatus');
+  if(showDone && statusEl) statusEl.textContent = `Syncing returned forms 0 / ${targets.length}...`;
+  for(let i=0;i<targets.length;i++){
+    const item = targets[i];
+    try {
+      const ackRow = await syncAcknowledgmentRow(item.entry, item.staffName);
+      const staffKey = acknowledgmentRowKey(ackRow, item.entry);
+      acknowledgmentByFinding.set(item.entry.id, ackRow);
+      if(staffKey) acknowledgmentByFindingStaff.set(staffKey, ackRow);
+      const rows = (acknowledgmentRowsByFinding.get(item.entry.id) || []).filter(row => acknowledgmentRowKey(row, item.entry) !== staffKey);
+      rows.unshift(ackRow);
+      acknowledgmentRowsByFinding.set(item.entry.id, rows);
+      ok++;
+    } catch(error) {
+      lastAuditSyncError = error.message || String(error);
+      console.warn('Returned variance sync failed:', error);
+    }
+    if(showDone && statusEl) statusEl.textContent = `Syncing returned forms ${i+1} / ${targets.length}...`;
+  }
+  const touchedEntries = [...new Map(targets.map(item => [item.entry.id, item.entry])).values()];
+  for(const entry of touchedEntries){
+    if(await pushAuditFinding(entry)) findingOk++;
+  }
+  if(showDone){
+    await loadAcknowledgmentReturns(false);
+    renderAll();
+    const message = targets.length
+      ? `Returned forms synced ${ok} / ${targets.length}. Audit statuses synced ${findingOk} / ${touchedEntries.length}.`
+      : 'No local returned forms found to sync.';
+    if(statusEl) statusEl.textContent = message;
+    showTemporaryStatus(message);
+    if(targets.length && ok < targets.length){
+      alert('Some returned variances are still only saved on this computer. Check the connection, then click "Sync returned now" again.');
+    }
+  }
+  return { ok, total: targets.length, findingOk, findingTotal: touchedEntries.length };
 }
 
 function parseCsv(text){
@@ -1352,13 +1706,13 @@ function renderPhiControls(){
   const statusEl = document.getElementById('phiTrustStatus');
   if(!statusEl) return;
   if(!hasPhiPassword()){
-    statusEl.textContent = 'PHI password not set on this browser. Patient/MR# hidden.';
+    statusEl.textContent = 'PHI password not set on this browser/computer. Patient/MR# hidden.';
   } else if(canShowPhi()){
-    statusEl.textContent = 'PHI unlocked on this trusted browser for this session.';
+    statusEl.textContent = 'PHI unlocked on this trusted browser/computer for this session.';
   } else if(isPhiTrusted()){
-    statusEl.textContent = 'Trusted work computer. PHI locked until password is entered.';
+    statusEl.textContent = 'Trusted work computer/browser. PHI locked until password is entered.';
   } else {
-    statusEl.textContent = 'This browser is not trusted. Unlock with the PHI password to trust it.';
+    statusEl.textContent = 'This browser/computer is not trusted. Unlock with the local PHI password to trust it.';
   }
 }
 
@@ -1527,7 +1881,7 @@ function mergeImportedEntry(existing, imported){
     id: existing.id || imported.id,
     patient: choosePhiValue(existing.patient, imported.patient),
     mrn: choosePhiValue(existing.mrn, imported.mrn),
-    issue: imported.issue || existing.issue || '',
+    issue: chooseDetailedIssue(existing.issue, imported.issue),
     tags: imported.tags && imported.tags.length ? imported.tags : (existing.tags || []),
     staff: imported.staff && imported.staff.length ? imported.staff : (existing.staff || []),
     variance: preserveVariance ? {...importedVariance, ...existingVariance} : {...existingVariance, ...importedVariance},
@@ -1547,6 +1901,7 @@ async function importAuditCsv(){
   }
   if(statusEl) statusEl.textContent = 'Reading CSV...';
   try {
+    backupEntries('Before CSV import');
     const text = await file.text();
     const imported = csvObjects(text).map(entryFromImportRow).filter(Boolean);
     if(!imported.length){
@@ -1619,9 +1974,47 @@ function rowStaffName(row){
   return String((row && (row.signed_name || row.staff_name)) || '').trim();
 }
 
+function isPlaceholderReturnName(name){
+  const key = staffNameKey(name);
+  return !key || ['employee','manually returned','unspecified employee','returned form marked received by leadership'].includes(key);
+}
+
 function acknowledgmentStaffKey(findingId, staffName){
   const key = staffNameKey(staffName);
   return findingId && key ? findingId + '::' + key : '';
+}
+
+function acknowledgmentRowStaffName(row, entry){
+  const name = rowStaffName(row);
+  const required = entryRequiredStaff(entry);
+  if(isPlaceholderReturnName(name) && required.length === 1) return required[0];
+  return name;
+}
+
+function acknowledgmentRowKey(row, entry){
+  const findingId = (row && row.finding_id) || (entry && entry.id) || '';
+  const name = acknowledgmentRowStaffName(row, entry);
+  return acknowledgmentStaffKey(findingId, name) || (findingId ? findingId + '::manual' : '');
+}
+
+function acknowledgmentRowTime(row){
+  const signed = Date.parse(row && row.signed_at || '');
+  if(Number.isFinite(signed)) return signed;
+  const requested = Date.parse(row && row.requested_at || '');
+  return Number.isFinite(requested) ? requested : 0;
+}
+
+function newestAcknowledgmentRows(rows, entry){
+  const byKey = new Map();
+  (rows || []).forEach(row => {
+    const key = acknowledgmentRowKey(row, entry);
+    if(!key) return;
+    const existing = byKey.get(key);
+    if(!existing || acknowledgmentRowTime(row) >= acknowledgmentRowTime(existing)){
+      byKey.set(key, row);
+    }
+  });
+  return [...byKey.values()].sort((a,b)=>acknowledgmentRowTime(b) - acknowledgmentRowTime(a));
 }
 
 function signatureStorageKey(findingId, staffName){
@@ -1653,36 +2046,47 @@ function acknowledgmentForStaff(findingId, staffName){
 
 function returnedRecordsForEntry(entry){
   if(!entry) return [];
-  const rows = acknowledgmentRowsForEntry(entry);
+  const rows = newestAcknowledgmentRows(acknowledgmentRowsForEntry(entry), entry);
   const records = [];
   const seen = new Set();
   rows.forEach(row => {
-    const name = rowStaffName(row);
-    const key = acknowledgmentStaffKey(entry.id, name) || (entry.id + '::row_' + row.id);
+    const name = acknowledgmentRowStaffName(row, entry);
+    const key = acknowledgmentRowKey(row, entry) || (entry.id + '::row_' + row.id);
     if(seen.has(key)) return;
     seen.add(key);
     records.push({ entry, ack: row, staffName: name || 'Employee', staffKey: key });
   });
-  if(!records.length && entry.variance && entry.variance.status === 'received'){
-    records.push({ entry, ack: null, staffName: (entry.staff || []).join(', ') || 'Employee', staffKey: entry.id + '::manual' });
+  const variance = entry.variance || {};
+  if(!records.length && (variance.status === 'received' || (variance.dateReceived && entryRequiredStaff(entry).length <= 1))){
+    const returnedNames = Array.isArray(variance.returnedNames) && variance.returnedNames.length
+      ? variance.returnedNames
+      : (entryRequiredStaff(entry).length ? entryRequiredStaff(entry) : [(entry.staff || []).join(', ') || 'Employee']);
+    returnedNames.forEach(name=>{
+      const clean = String(name || '').trim() || 'Employee';
+      records.push({ entry, ack: null, staffName: clean, staffKey: acknowledgmentStaffKey(entry.id, clean) || (entry.id + '::manual') });
+    });
   }
   return records;
 }
 
 function entryReturnSummary(entry){
   const required = entryRequiredStaff(entry);
-  const rows = acknowledgmentRowsForEntry(entry);
-  const returnedKeys = new Set(rows.map(row => acknowledgmentStaffKey(entry.id, rowStaffName(row))).filter(Boolean));
+  const rows = newestAcknowledgmentRows(acknowledgmentRowsForEntry(entry), entry);
+  const returnedKeys = new Set(rows.map(row => acknowledgmentRowKey(row, entry)).filter(Boolean));
   const returnedRequired = required.filter(name => returnedKeys.has(acknowledgmentStaffKey(entry.id, name)));
   const extraReturned = rows
-    .map(row => rowStaffName(row))
+    .map(row => acknowledgmentRowStaffName(row, entry))
     .filter(name => name && !required.some(staff => acknowledgmentStaffKey(entry.id, staff) === acknowledgmentStaffKey(entry.id, name)));
+  const localReturnedNames = Array.isArray(entry && entry.variance && entry.variance.returnedNames)
+    ? entry.variance.returnedNames.map(name=>String(name || '').trim()).filter(Boolean)
+    : [];
+  const localReturnedRequired = required.filter(name => localReturnedNames.some(returned => acknowledgmentStaffKey(entry.id, returned) === acknowledgmentStaffKey(entry.id, name)));
   const returnedNames = required.length
-    ? [...returnedRequired, ...extraReturned]
-    : (rows.map(row => rowStaffName(row)).filter(Boolean));
+    ? [...new Set([...returnedRequired, ...localReturnedRequired, ...extraReturned])]
+    : [...new Set([...rows.map(row => acknowledgmentRowStaffName(row, entry)).filter(Boolean), ...localReturnedNames])];
   const total = required.length || (returnedNames.length ? returnedNames.length : ((entry.variance && entry.variance.status === 'received') ? 1 : 0));
   const returned = required.length ? Math.min(returnedNames.length, total) : (returnedNames.length || ((entry.variance && entry.variance.status === 'received') ? 1 : 0));
-  const pending = required.filter(name => !returnedKeys.has(acknowledgmentStaffKey(entry.id, name)));
+  const pending = required.filter(name => !returnedNames.some(returned => acknowledgmentStaffKey(entry.id, returned) === acknowledgmentStaffKey(entry.id, name)));
   const latest = rows[0] || null;
   const latestDate = latest && latest.signed_at ? String(latest.signed_at).slice(0,10) : ((entry.variance && entry.variance.dateReceived) || '');
   return { total, returned, pending, returnedNames, latestDate, allReturned: total > 0 && returned >= total };
@@ -1998,9 +2402,9 @@ async function submitAcknowledgment(ackId){
 
     const ackRow = { finding_id: ackId, staff_name: signedName, status: 'acknowledged', comment, signed_name: signedName, signed_at: signedAt };
     acknowledgmentByFinding.set(ackId, ackRow);
-    const staffKey = acknowledgmentStaffKey(ackId, signedName);
+    const staffKey = acknowledgmentRowKey(ackRow, entry || { id: ackId, staff: [] });
     if(staffKey) acknowledgmentByFindingStaff.set(staffKey, ackRow);
-    const rows = (acknowledgmentRowsByFinding.get(ackId) || []).filter(row => acknowledgmentStaffKey(ackId, rowStaffName(row)) !== staffKey);
+    const rows = (acknowledgmentRowsByFinding.get(ackId) || []).filter(row => acknowledgmentRowKey(row, entry || { id: ackId, staff: [] }) !== staffKey);
     rows.unshift(ackRow);
     acknowledgmentRowsByFinding.set(ackId, rows);
 
@@ -2026,6 +2430,7 @@ async function submitAcknowledgment(ackId){
       entries[idx].variance.receivedAutomatically = true;
       entries[idx].variance.returnedCount = summary.returned;
       entries[idx].variance.returnedTotal = summary.total;
+      entries[idx].variance.returnedNames = summary.returnedNames;
       saveEntries(entries);
     }
     if(status) {
@@ -2110,6 +2515,7 @@ function renderTabs(){
 }
 function setTab(t){ currentTab = t; renderAll(); }
 function setAuditMonth(month){ selectedAuditMonth = month || ''; renderAll(); }
+function setReturnedMonth(month){ selectedReturnedMonth = month || ''; renderReturnedForms(); }
 
 function smartsheetSearchUrl(query){
   return 'https://app.smartsheet.com/b/search?query=' + encodeURIComponent(query);
@@ -2362,6 +2768,28 @@ function staffChips(staff){
   if(!staff || staff.length===0) return '<span style="color:var(--muted)">—</span>';
   return staff.map(s=>`<span class="staff-chip">${s}</span>`).join('');
 }
+function shortStaffReturnLabel(name){
+  const value = String(name || '').trim();
+  if(!value) return 'staff';
+  if(value.includes(',')) return value.split(',')[0].trim() || value;
+  const parts = value.split(/\s+/).filter(Boolean);
+  return parts[parts.length - 1] || value;
+}
+function pendingReturnButtons(entry){
+  if(!entry || !entry.variance) return '';
+  const status = entry.variance.status || 'not_sent';
+  if(status === 'na' || status === 'not_sent') return '';
+  const required = entryRequiredStaff(entry);
+  if(required.length < 2) return '';
+  const summary = entryReturnSummary(entry);
+  if(summary.allReturned) return '';
+  const pending = summary.pending.length ? summary.pending : required;
+  return pending.map(name => {
+    const label = 'Returned: ' + shortStaffReturnLabel(name);
+    const action = `markStaffReturned(${jsLiteral(entry.id)}, ${jsLiteral(name)})`;
+    return `<button onclick="${escapeHtml(action)}" title="Mark ${escapeHtml(name)} returned">${escapeHtml(label)}</button>`;
+  }).join('');
+}
 function protectedPhiLabel(){
   let title = 'Patient identifiers are not stored in the shared public summary table. Import the latest Smartsheet CSV on this work computer to show them locally.';
   if(!hasPhiPassword()) title = 'PHI hidden. Set a PHI password in Settings on the work computer.';
@@ -2382,8 +2810,8 @@ function mrnCell(e){
 function varianceLabel(v, entry){
   const status = (v && v.status) || 'not_sent';
   const summary = entryReturnSummary(entry);
-  const allReturned = summary.total > 1 && summary.allReturned;
-  const partialReturned = summary.total > 1 && summary.returned > 0 && !summary.allReturned;
+  const allReturned = summary.allReturned;
+  const partialReturned = summary.returned > 0 && !summary.allReturned;
   const displayStatus = allReturned ? 'received' : (partialReturned ? 'sent' : status);
   const map = {not_sent:'Not sent', sent:'Awaiting return', received:'Returned', na:'N/A'};
   const label = partialReturned ? 'Partial return' : (allReturned ? 'Returned' : (map[displayStatus] || displayStatus));
@@ -2434,6 +2862,7 @@ function renderTable(){
         <button onclick="openSmartsheetForEntry('${e.id}')" title="Open the source Smartsheet and copy row lookup details">Smartsheet</button>
         ${(!e.variance || e.variance.status==='not_sent') ? `<button onclick="markVarianceSent('${e.id}')" title="Confirm the variance was actually sent">Mark Sent</button>` : ''}
         ${varianceCanMarkReceived(e) ? `<button onclick="receiveVariance('${e.id}')" title="Mark one staff variance form as returned">Mark Received</button>` : ''}
+        ${pendingReturnButtons(e)}
         ${(e.variance && ['sent','received'].includes(e.variance.status)) ? `<button onclick="resetVarianceStatus('${e.id}')" title="Correct the variance status back to not sent">Reset Status</button>` : ''}
         ${hasReturnedForms(e) ? `<button onclick="printReturnedForm('${e.id}')" title="View and print returned form(s)">Print Form</button>` : ''}
         <button onclick="deleteEntry('${e.id}')">Delete</button>
@@ -2468,8 +2897,57 @@ function clearAuditFilters(){
   renderAll();
 }
 
+function returnedSourceEntries(){
+  return loadEntries().filter(entry => is3B3CUnit(entry) || hasReturnedForms(entry));
+}
+
+function placeholderEntryForAcknowledgment(findingId, row){
+  const name = acknowledgmentRowStaffName(row, { id: findingId, staff: [] }) || 'Employee';
+  const returnedDate = row && row.signed_at ? String(row.signed_at).slice(0,10) : '';
+  return {
+    id: findingId,
+    type: 'chart',
+    date: returnedDate,
+    status: 'open',
+    auditLineNumber: '',
+    patient: '',
+    mrn: '',
+    unit: '3B/3C',
+    context: 'Returned variance form loaded without local audit details',
+    items: {},
+    issue: 'Returned variance form. Audit details are not loaded on this device.',
+    staff: [name],
+    over24h: false,
+    reporter: '',
+    variance: { status: 'received', dateReceived: returnedDate, receivedAutomatically: true },
+    sharedSummaryOnly: true
+  };
+}
+
+function allReturnedRecords(){
+  const entries = returnedSourceEntries();
+  const records = entries.flatMap(returnedRecordsForEntry);
+  const loadedIds = new Set(entries.map(entry => entry.id));
+  acknowledgmentRowsByFinding.forEach((rows, findingId) => {
+    if(loadedIds.has(findingId)) return;
+    const placeholder = { id: findingId, staff: [] };
+    newestAcknowledgmentRows(rows, placeholder).forEach(row => {
+      const entry = placeholderEntryForAcknowledgment(findingId, row);
+      const staffName = acknowledgmentRowStaffName(row, entry) || rowStaffName(row) || 'Employee';
+      records.push({
+        entry,
+        ack: row,
+        staffName,
+        staffKey: acknowledgmentRowKey(row, entry) || (findingId + '::orphan')
+      });
+    });
+  });
+  return records;
+}
+
 function returnedEntries(){
-  return visibleEntries().flatMap(returnedRecordsForEntry)
+  return allReturnedRecords()
+    .filter(record=>!selectedReturnedMonth || auditMonthKey(record.entry.date)===selectedReturnedMonth)
     .sort((a,b)=>{
       const aDate = (a.ack && a.ack.signed_at) || (a.entry.variance && a.entry.variance.dateReceived) || a.entry.date || '';
       const bDate = (b.ack && b.ack.signed_at) || (b.entry.variance && b.entry.variance.dateReceived) || b.entry.date || '';
@@ -2477,14 +2955,27 @@ function returnedEntries(){
     });
 }
 
+function renderReturnedMonthFilter(){
+  const records = allReturnedRecords();
+  const months = [...new Set(records.map(record=>auditMonthKey(record.entry.date)).filter(Boolean))].sort().reverse();
+  if(selectedReturnedMonth && !months.includes(selectedReturnedMonth)) selectedReturnedMonth = '';
+  const monthSelect = document.getElementById('returnedMonthFilter');
+  if(monthSelect){
+    monthSelect.innerHTML = '<option value="">All returned months</option>' + months.map(month=>`<option value="${month}">${auditMonthLabel(month)}</option>`).join('');
+    monthSelect.value = selectedReturnedMonth;
+  }
+}
+
 function renderReturnedForms(){
   const wrap = document.getElementById('returnedWrap');
   const records = returnedEntries();
+  const totalReturned = allReturnedRecords().length;
   if(!records.length){
     wrap.innerHTML = '<div class="empty">No returned variance forms yet.</div>';
     return;
   }
-  wrap.innerHTML = `<table><thead><tr><th>Returned</th><th>Employee</th><th>Audit date</th><th>Type</th><th>Response</th><th></th></tr></thead><tbody>${records.map(record=>{
+  const summary = `Showing ${records.length} of ${totalReturned} returned variance forms` + (selectedReturnedMonth ? ` · ${auditMonthLabel(selectedReturnedMonth)}` : ' · all returned months');
+  wrap.innerHTML = `<div class="hint" style="padding:10px 14px;border-bottom:1px solid var(--line);">${summary}</div><table><thead><tr><th>Returned</th><th>Employee</th><th>Audit date</th><th>Type</th><th>Response</th><th></th></tr></thead><tbody>${records.map(record=>{
     const e = record.entry;
     const ack = record.ack;
     const employee = (ack && (ack.signed_name || ack.staff_name)) || record.staffName || (e.staff || []).join(', ') || '—';
@@ -2553,6 +3044,8 @@ function printAllReturned(){
 }
 
 function showReturnedForms(){
+  selectedReturnedMonth = '';
+  renderReturnedMonthFilter();
   const keys = returnedEntries()
     .filter(record=>record.entry.variance && record.entry.variance.receivedAutomatically)
     .map(record=>record.staffKey || record.entry.id);
@@ -2562,7 +3055,7 @@ function showReturnedForms(){
 }
 
 function renderStats(){
-  const entries = visibleEntries();
+  const entries = entriesForSelectedMonth(visibleEntries());
   document.getElementById('statTotal').textContent = entries.length;
   document.getElementById('statChart').textContent = entries.filter(e=>e.type==='chart').length;
   document.getElementById('statUnit').textContent = entries.filter(e=>e.type==='unit').length;
@@ -2583,7 +3076,7 @@ function renderStats(){
 }
 
 function renderMissingMost(){
-  const entries = visibleEntries();
+  const entries = entriesForSelectedMonth(visibleEntries());
   const grid = document.getElementById('missingGrid');
   let html = '';
 
@@ -2667,6 +3160,7 @@ function renderAll(){
   renderTabs();
   renderTable();
   renderStats();
+  renderReturnedMonthFilter();
   renderReturnedForms();
   renderMissingMost();
 }
@@ -3025,6 +3519,23 @@ async function receiveVariance(id){
   const dateReceived = prompt('Date variance form was returned (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
   if(dateReceived===null) return;
   const dateValue = dateReceived.trim() || new Date().toISOString().slice(0,10);
+  await recordReturnedStaff(id, staffName, dateValue);
+}
+
+async function markStaffReturned(id, staffName){
+  const name = String(staffName || '').trim();
+  if(!name) return;
+  const dateReceived = prompt(`Date ${name} returned this variance (YYYY-MM-DD):`, new Date().toISOString().slice(0,10));
+  if(dateReceived===null) return;
+  const dateValue = dateReceived.trim() || new Date().toISOString().slice(0,10);
+  await recordReturnedStaff(id, name, dateValue);
+}
+
+async function recordReturnedStaff(id, staffName, dateValue){
+  let entries = loadEntries();
+  const idx = entries.findIndex(x=>x.id===id);
+  if(idx<0) return;
+  const e = entries[idx];
   const signedAt = dateValue + 'T12:00:00.000Z';
   const ackRow = {
     finding_id: id,
@@ -3034,18 +3545,21 @@ async function receiveVariance(id){
     signed_name: staffName || 'Manually returned',
     signed_at: signedAt
   };
+  e.variance = e.variance || {};
+  e.variance.dateReceived = dateValue;
+  let returnSynced = false;
   try {
-    await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments`, {
-      method: 'POST',
-      headers: { apikey: AUDIT_SB_CONFIG.key, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify(ackRow)
-    });
-  } catch(error) { /* local status still updates */ }
+    await syncAcknowledgmentRow(e, ackRow.signed_name);
+    returnSynced = true;
+  } catch(error) {
+    lastAuditSyncError = error.message || String(error);
+    console.warn('Returned variance did not sync:', error);
+  }
 
-  const staffKey = acknowledgmentStaffKey(id, ackRow.signed_name);
+  const staffKey = acknowledgmentRowKey(ackRow, e);
   acknowledgmentByFinding.set(id, ackRow);
   if(staffKey) acknowledgmentByFindingStaff.set(staffKey, ackRow);
-  const rows = (acknowledgmentRowsByFinding.get(id) || []).filter(row => acknowledgmentStaffKey(id, rowStaffName(row)) !== staffKey);
+  const rows = (acknowledgmentRowsByFinding.get(id) || []).filter(row => acknowledgmentRowKey(row, e) !== staffKey);
   rows.unshift(ackRow);
   acknowledgmentRowsByFinding.set(id, rows);
 
@@ -3056,9 +3570,16 @@ async function receiveVariance(id){
   entries[idx].variance.receivedAutomatically = true;
   entries[idx].variance.returnedCount = summary.returned;
   entries[idx].variance.returnedTotal = summary.total;
+  entries[idx].variance.returnedNames = summary.returnedNames;
   saveEntries(entries);
-  pushAuditFinding(entries[idx]);
+  const findingSynced = await pushAuditFinding(entries[idx]);
   renderAll();
+  if(returnSynced && findingSynced){
+    showTemporaryStatus('Returned variance saved and synced.');
+  } else {
+    showTemporaryStatus('Returned variance saved on this computer only.');
+    alert('Returned variance was saved on this computer, but it did not fully cross over. Check the connection, then click "Sync returned now" from this same computer.');
+  }
 }
 
 // ---------- settings ----------
@@ -3067,6 +3588,7 @@ async function openSettings(){
   renderDirectoryChips();
   renderSmartsheetSourceButtons();
   renderPhiControls();
+  renderBackupStatus();
   document.getElementById('ccList').value = loadCC();
   document.getElementById('settingsOverlay').classList.add('show');
 }
@@ -3110,3 +3632,4 @@ checkAckLink();
 </script>
 </body>
 </html>
+
