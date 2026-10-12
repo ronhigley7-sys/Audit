@@ -998,14 +998,41 @@ function mergeSharedEntries(localEntries, sharedEntries){
   return Array.from(merged.values());
 }
 
+async function fetchAllAuditRows(url){
+  const rows = [];
+  let offset = 0;
+  while(true){
+    const response = await fetch(url + '&limit=500&offset=' + offset, {
+      headers: { apikey: AUDIT_SB_CONFIG.key }
+    });
+    if(!response.ok) throw new Error('Audit data could not be loaded (' + response.status + ').');
+    const page = await response.json();
+    if(!Array.isArray(page)) throw new Error('Invalid audit data response.');
+    rows.push(...page);
+    if(!page.length) break;
+    offset += page.length;
+  }
+  return rows;
+}
+
+async function loadReturnedAuditEntries(rows){
+  const entries = loadEntries();
+  const known = new Set(entries.map(entry => entry.id));
+  const missing = [...new Set(rows.map(row => row.finding_id).filter(id => id && !known.has(id)))];
+  for(let i = 0; i < missing.length; i += 50){
+    const ids = missing.slice(i, i + 50).map(id => '"' + String(id).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',');
+    const findings = await fetchAllAuditRows(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&id=in.${encodeURIComponent('(' + ids + ')')}&order=id.asc`);
+    findings.map(entryFromAuditFinding).filter(is3B3CUnit).forEach(entry => {
+      if(!known.has(entry.id)){ entries.push(entry); known.add(entry.id); }
+    });
+  }
+  saveEntries(entries);
+}
+
 async function loadSharedAuditFindings(){
   try {
     const cutoff = lookbackDate(SHARED_LOOKBACK_DAYS);
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast`, {
-      headers: { apikey: AUDIT_SB_CONFIG.key }
-    });
-    if(!r.ok) return;
-    const rows = await r.json();
+    const rows = await fetchAllAuditRows(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_findings?select=id,audit_type,finding_date,status,unit,staff_names,tags,variance_status,audit_line_number&finding_date=gte.${cutoff}&order=finding_date.desc.nullslast,id.asc`);
     const sharedEntries = rows.map(entryFromAuditFinding).filter(is3B3CUnit);
     saveEntries(mergeSharedEntries(loadEntries(), sharedEntries));
     await loadAcknowledgmentReturns(false);
@@ -1018,13 +1045,8 @@ async function loadSharedAuditFindings(){
 // Received and supplies the employee response/signature for viewing/printing.
 async function loadAcknowledgmentReturns(renderAfter){
   try {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - SHARED_LOOKBACK_DAYS);
-    const r = await fetch(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=id,finding_id,staff_name,status,comment,signed_name,signed_at,requested_at&status=eq.acknowledged&signed_at=gte.${encodeURIComponent(cutoff.toISOString())}&order=signed_at.desc.nullslast`, {
-      headers: { apikey: AUDIT_SB_CONFIG.key }
-    });
-    if(!r.ok) return;
-    const rows = await r.json();
+    const rows = await fetchAllAuditRows(`${AUDIT_SB_CONFIG.url}/rest/v1/audit_acknowledgments?select=id,finding_id,staff_name,status,comment,signed_name,signed_at,requested_at&status=eq.acknowledged&order=signed_at.desc.nullslast,id.desc`);
+    await loadReturnedAuditEntries(rows);
     const signatureMaps = await loadSignatureReturns();
     signatureByFinding = signatureMaps.byFinding;
     signatureByFindingStaff = signatureMaps.byStaff;
@@ -1061,7 +1083,10 @@ async function loadAcknowledgmentReturns(renderAfter){
     });
     if(changed) saveEntries(entries);
     if(renderAfter !== false) renderAll();
-  } catch(e) { /* returned forms still show without the response details */ }
+  } catch(e) {
+    console.warn('Returned variance forms refresh failed:', e);
+    showTemporaryStatus('Returned forms could not fully refresh. Tap Refresh to retry.');
+  }
 }
 
 async function refreshSharedAuditData(){
